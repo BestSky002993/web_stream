@@ -1,0 +1,173 @@
+# Production nginx config for the video-storage stack.
+#
+# ADMIN_BASE_PATH is substituted by the nginx Docker entrypoint from
+# docker-compose.prod.yml, for example /control-9x7k-admin-panel.
+# TLS certificate files are mounted from ./deploy/certs:
+#   /etc/nginx/certs/fullchain.pem
+#   /etc/nginx/certs/privkey.pem
+#
+# Cloudflare:
+#   - DNS A @ -> VPS_IP
+#   - SSL/TLS mode: Full (strict)
+#   - Cloudflare Origin Certificates can be placed at the same cert paths.
+#   - Keep Range requests enabled; they are required for MP4 seeking and HLS.
+
+upstream api_backend {
+    server api:8080;
+    keepalive 64;
+    keepalive_requests 1000;
+    keepalive_timeout 60s;
+}
+
+upstream dashboard_backend {
+    server dashboard:3000;
+    keepalive 32;
+    keepalive_requests 1000;
+    keepalive_timeout 60s;
+}
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+map $http_cf_connecting_ip $best_remote_addr {
+    default $http_cf_connecting_ip;
+    ''      $remote_addr;
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    server_tokens off;
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    http2 on;
+    server_name _;
+    absolute_redirect off;
+
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:video_storage_tls:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    server_tokens off;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+
+    client_max_body_size 2100m;
+    client_body_timeout 3600s;
+    send_timeout 3600s;
+
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_connect_timeout 30s;
+    proxy_next_upstream error timeout http_502 http_503 http_504;
+    proxy_next_upstream_tries 2;
+
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $best_remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $host;
+    proxy_set_header Range             $http_range;
+    proxy_set_header If-Range          $http_if_range;
+    proxy_set_header Upgrade           $http_upgrade;
+    proxy_set_header Connection        $connection_upgrade;
+    proxy_http_version 1.1;
+
+    location /api/ {
+        proxy_buffering on;
+        proxy_buffers 32 64k;
+        proxy_busy_buffers_size 256k;
+        proxy_request_buffering off;
+        proxy_max_temp_file_size 0;
+        proxy_pass http://api_backend;
+    }
+
+    location ~ ^/api/v1/hls/.+\.m3u8$ {
+        proxy_buffering on;
+        proxy_buffers 16 32k;
+        proxy_request_buffering off;
+        proxy_max_temp_file_size 0;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "private, no-cache, max-age=0, must-revalidate" always;
+        proxy_pass http://api_backend;
+    }
+
+    location ~ ^/api/v1/hls/.+\.(ts|m4s|mp4)$ {
+        gzip off;
+        proxy_buffering on;
+        proxy_buffers 32 128k;
+        proxy_busy_buffers_size 512k;
+        proxy_request_buffering off;
+        proxy_max_temp_file_size 0;
+        proxy_force_ranges on;
+        proxy_set_header Range $http_range;
+        proxy_set_header If-Range $http_if_range;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "private, max-age=3600, immutable" always;
+        add_header Accept-Ranges "bytes" always;
+        proxy_pass http://api_backend;
+    }
+
+    location ~ ^/api/v1/stream/ {
+        gzip off;
+        proxy_buffering on;
+        proxy_buffers 32 128k;
+        proxy_busy_buffers_size 512k;
+        proxy_request_buffering off;
+        proxy_max_temp_file_size 0;
+        proxy_force_ranges on;
+        proxy_set_header Range $http_range;
+        proxy_set_header If-Range $http_if_range;
+        add_header Accept-Ranges "bytes" always;
+        proxy_pass http://api_backend;
+    }
+
+    location = /health {
+        proxy_pass http://api_backend;
+    }
+
+    location ${ADMIN_BASE_PATH}/ {
+        proxy_pass http://dashboard_backend;
+    }
+
+    location = ${ADMIN_BASE_PATH} {
+        proxy_pass http://dashboard_backend;
+    }
+
+    location = /admin {
+        return 404;
+    }
+
+    location /admin/ {
+        return 404;
+    }
+
+    location /_next/ {
+        proxy_buffering on;
+        expires 1y;
+        proxy_pass http://dashboard_backend;
+    }
+
+    location = / {
+        return 302 ${ADMIN_BASE_PATH}/login;
+    }
+}

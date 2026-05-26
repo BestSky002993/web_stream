@@ -1,0 +1,4 @@
+deploy/certs/*
+!deploy/certs/.gitkeep
+.env.production
+

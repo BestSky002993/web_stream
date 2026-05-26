@@ -1,0 +1,27 @@
+# Development image for the admin-dashboard Next.js app.
+# Used by docker-compose.yml — runs `next dev` with hot reload via a
+# bind mount over /app. `node_modules` and `.next` inside the
+# container are preserved by anonymous volumes in the compose file
+# (the host doesn't need them).
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install deps first so changes to source files don't bust the
+# install layer.
+COPY package.json package-lock.json* ./
+RUN npm install
+
+# Fallback copy for `docker run` without a bind mount. When used via
+# compose, the source comes from the host volume mount instead.
+COPY . .
+
+ENV NEXT_TELEMETRY_DISABLED=1
+
+EXPOSE 3000
+
+# Bind explicitly to 0.0.0.0 so the dev server is reachable through
+# the published port — `next dev` defaults can vary across Next
+# versions and host setups; being explicit avoids surprises.
+CMD ["npx", "next", "dev", "--hostname", "0.0.0.0", "--port", "3000"]

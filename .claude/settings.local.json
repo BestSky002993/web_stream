@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash -n /Users/best/Desktop/claude/web_stream/scripts/*.sh)"
+    ]
+  }
+}

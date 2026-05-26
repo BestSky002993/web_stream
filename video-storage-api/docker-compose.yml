@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: video_storage_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-video_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-video_password}
+      POSTGRES_DB: ${DB_NAME:-video_storage}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-video_user} -d ${DB_NAME:-video_storage}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - video_net
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    container_name: video_storage_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+    ports:
+      - "${API_PORT:-8080}:8080"
+    volumes:
+      - .:/app
+      - go_mod_cache:/go/pkg/mod
+      # Persistent uploaded media. The bind mount on `.` already makes
+      # ./storage visible inside the container; the named volume below
+      # is an explicit overlay so files survive even if the bind mount
+      # is dropped (e.g. when running with the prod Dockerfile).
+      - storage_data:/app/storage
+    networks:
+      - video_net
+
+  # One-shot migration runner using golang-migrate.
+  # Invoked via:  docker compose run --rm migrate <subcommand>
+  # Examples:
+  #   docker compose run --rm migrate up
+  #   docker compose run --rm migrate down 1
+  #   docker compose run --rm migrate version
+  migrate:
+    image: migrate/migrate:v4.17.1
+    container_name: video_storage_migrate
+    profiles: ["tools"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations
+    networks:
+      - video_net
+    entrypoint:
+      - migrate
+      - -path=/migrations
+      - -database=postgres://${DB_USER:-video_user}:${DB_PASSWORD:-video_password}@postgres:5432/${DB_NAME:-video_storage}?sslmode=disable
+    command: ["up"]
+
+volumes:
+  postgres_data:
+  go_mod_cache:
+  storage_data:
+
+networks:
+  video_net:
+    driver: bridge

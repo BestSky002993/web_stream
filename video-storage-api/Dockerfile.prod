@@ -1,0 +1,63 @@
+# Production multi-stage build for the Go API, worker, and one-shot admin seeder.
+#
+# Build:    docker compose -f docker-compose.prod.yml build api
+# Runtime:  non-root user, ffmpeg + ffprobe installed, no dev tooling.
+#
+# The image is fully self-contained — no source mount, no go toolchain
+# at runtime, no Air, no shell drop-in by default.
+
+# ---------- Build stage ----------
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /app
+
+RUN apk add --no-cache git ca-certificates
+
+# Module download as its own layer for cache hits.
+COPY go.mod go.sum* ./
+RUN go mod download
+
+COPY . .
+
+# Static-style builds: CGO off, stripped symbols, no DWARF.
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /out/api ./cmd/api
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /out/seed-admin ./cmd/seed-admin
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /out/worker ./cmd/worker
+
+# ---------- Runtime stage ----------
+FROM alpine:3.20 AS runtime
+
+# ffmpeg + ffprobe are required for thumbnail generation, duration
+# probing, and HLS conversion (Phases 5 / 12 / 13).
+# wget is included only for the HEALTHCHECK.
+RUN apk add --no-cache ca-certificates tzdata wget ffmpeg && \
+    addgroup -S app && adduser -S app -G app
+
+WORKDIR /app
+COPY --from=builder /out/api /app/api
+COPY --from=builder /out/seed-admin /app/seed-admin
+COPY --from=builder /out/worker /app/worker
+
+# Storage directory lives under /app/storage — bind a named volume
+# here in compose so uploads + HLS output survive container rebuilds.
+RUN mkdir -p /app/storage && chown -R app:app /app
+
+USER app
+
+ENV GIN_MODE=release \
+    APP_ENV=production \
+    API_PORT=8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -qO- http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["/app/api"]

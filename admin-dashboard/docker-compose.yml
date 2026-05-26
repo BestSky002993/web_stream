@@ -1,0 +1,40 @@
+# Standalone compose for the admin-dashboard.
+#
+# Run it independently of the video-storage-api compose:
+#
+#   docker compose up --build
+#
+# The dashboard is a pure browser-side client of the Go backend, so
+# NEXT_PUBLIC_API_BASE_URL must be reachable from the user's BROWSER,
+# not from inside this container. For local dev where the API is
+# also on the same host, http://localhost:8080 is the right value
+# (the API's compose publishes 8080 on the host).
+#
+# Cross-container DNS (e.g. NEXT_PUBLIC_API_BASE_URL=http://api:8080)
+# would only work for server-side requests, which this app does not
+# make — every fetch happens in the browser.
+
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: video_storage_dashboard
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_PORT:-3000}:3000"
+    environment:
+      # The browser hits this URL — override if your backend isn't on
+      # http://localhost:8080.
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080}
+      NEXT_TELEMETRY_DISABLED: "1"
+    volumes:
+      # Source mount → file changes trigger Next.js hot reload.
+      - .:/app
+      # Anonymous volumes mask the host so the container's installed
+      # node_modules and build cache survive.
+      - /app/node_modules
+      - /app/.next
+    # If you also bring up video-storage-api/docker-compose.yml in
+    # parallel, both export their own ports on the host — no shared
+    # network is required.

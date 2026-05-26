@@ -1,0 +1,64 @@
+# Production multi-stage build for the admin-dashboard.
+#
+# Uses Next.js `output: 'standalone'` so the runtime image is ~180 MB
+# without dragging the full node_modules tree along.
+#
+# NEXT_PUBLIC_* env vars are baked into the client bundle at BUILD
+# time. Pass them via --build-arg / compose `args:`:
+#
+#   docker build \
+#       --build-arg NEXT_PUBLIC_API_BASE_URL=https://tripbooking.net \
+#       --build-arg NEXT_PUBLIC_BASE_PATH=/control-9x7k-admin-panel \
+#       -f Dockerfile.prod \
+#       -t admin-dashboard:prod .
+
+# ---------- Dependencies ----------
+FROM node:20-alpine AS deps
+
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci || npm install
+
+# ---------- Build ----------
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Empty default → same-origin (client uses relative URLs).
+ARG NEXT_PUBLIC_API_BASE_URL=
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+
+# Empty default → dashboard served at root. Set to e.g. /control-... to
+# mount behind a reverse proxy at that path.
+ARG NEXT_PUBLIC_BASE_PATH=
+ENV NEXT_PUBLIC_BASE_PATH=$NEXT_PUBLIC_BASE_PATH
+
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN npm run build
+
+# ---------- Runtime ----------
+FROM node:20-alpine AS runtime
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser  --system --uid 1001 nextjs
+
+# `public/` is optional — only copy if it exists at build time.
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
+
+EXPOSE 3000
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+
+CMD ["node", "server.js"]

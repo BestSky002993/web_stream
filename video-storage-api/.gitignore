@@ -1,0 +1,22 @@
+# Binaries
+/bin/
+/tmp/
+*.exe
+*.test
+*.out
+
+# Env
+.env
+.env.local
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Build artifacts
+build-errors.log
+coverage.out
+
+# Uploaded media — directory is recreated by the app on startup.
+storage/

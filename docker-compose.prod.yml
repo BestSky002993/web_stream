@@ -1,0 +1,309 @@
+# Production compose for the full video platform.
+#
+#   1. cp .env.production.example .env.production
+#   2. fill in DB_PASSWORD / JWT_SECRET / STREAM_SIGNING_SECRET / admin credentials
+#   3. docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+#   4. docker compose --env-file .env.production -f docker-compose.prod.yml run --rm migrate up
+#   5. docker compose --env-file .env.production -f docker-compose.prod.yml run --rm seed-admin
+#
+# Day-to-day commands:
+#   docker compose --env-file .env.production -f docker-compose.prod.yml ps
+#   docker compose --env-file .env.production -f docker-compose.prod.yml logs -f
+#   docker compose --env-file .env.production -f docker-compose.prod.yml down
+#
+# Architecture differences vs. the dev composes:
+#   - Postgres is NOT published on the host (internal network only)
+#   - Go API runs the compiled binary (no Air, no source mount)
+#   - Next.js runs `next start` from the standalone build (no `next dev`)
+#   - nginx fronts HTTPS; the API and dashboard ports stay internal
+#   - persistent named volumes for the DB and video/HLS storage
+#   - GIN_MODE=release, APP_ENV=production, no debug overlays
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: video_storage_postgres_prod
+    restart: unless-stopped
+    # NOT publishing ports — postgres is only reachable from the
+    # internal Docker network.
+    environment:
+      POSTGRES_USER:     ${DB_USER:-video_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB:       ${DB_NAME:-video_storage}
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-video_user} -d ${DB_NAME:-video_storage}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+    mem_limit: ${POSTGRES_MEM_LIMIT:-1g}
+    cpus: ${POSTGRES_CPUS:-1.0}
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: video_storage_redis_prod
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "${REDIS_MAXMEMORY:-256mb}", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis_data_prod:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - internal
+    mem_limit: ${REDIS_MEM_LIMIT:-384m}
+    cpus: ${REDIS_CPUS:-0.5}
+
+  api:
+    build:
+      context: ./video-storage-api
+      dockerfile: Dockerfile.prod
+    container_name: video_storage_api_prod
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      APP_ENV:  production
+      GIN_MODE: release
+
+      DB_HOST:     postgres
+      DB_PORT:     "5432"
+      DB_USER:     ${DB_USER:-video_user}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_NAME:     ${DB_NAME:-video_storage}
+      DB_SSLMODE:  ${DB_SSLMODE:-disable}
+      DB_MAX_CONNS: "20"
+
+      JWT_SECRET:    ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      LOGIN_MAX_ATTEMPTS:          ${LOGIN_MAX_ATTEMPTS:-5}
+      LOGIN_LOCK_DURATION_MINUTES: ${LOGIN_LOCK_DURATION_MINUTES:-15}
+
+      VIDEO_STORAGE_PATH:     /app/storage/private/videos
+      THUMBNAIL_STORAGE_PATH: /app/storage/private/thumbnails
+      HLS_STORAGE_PATH:       /app/storage/private/hls
+      MAX_VIDEO_UPLOAD_SIZE_MB:     ${MAX_VIDEO_UPLOAD_SIZE_MB:-2048}
+      MAX_THUMBNAIL_UPLOAD_SIZE_MB: ${MAX_THUMBNAIL_UPLOAD_SIZE_MB:-10}
+
+      STREAM_SIGNING_SECRET:         ${STREAM_SIGNING_SECRET:?STREAM_SIGNING_SECRET is required}
+      STREAM_URL_EXPIRATION_MINUTES: ${STREAM_URL_EXPIRATION_MINUTES:-15}
+      ALLOWED_STREAM_DOMAINS:        ${ALLOWED_STREAM_DOMAINS:?ALLOWED_STREAM_DOMAINS is required}
+      PUBLIC_BASE_URL:               ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+      ALLOWED_CORS_ORIGINS:          ${ALLOWED_CORS_ORIGINS:?ALLOWED_CORS_ORIGINS is required}
+      HLS_SEGMENT_SECONDS:           ${HLS_SEGMENT_SECONDS:-4}
+      HLS_X264_PRESET:               ${HLS_X264_PRESET:-veryfast}
+      HLS_CONVERT_TIMEOUT:           ${HLS_CONVERT_TIMEOUT:-60m}
+      REDIS_ENABLED:                 ${REDIS_ENABLED:-true}
+      REDIS_ADDR:                    ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD:                ${REDIS_PASSWORD:-}
+      REDIS_DB:                      ${REDIS_DB:-0}
+      REDIS_KEY_PREFIX:              ${REDIS_KEY_PREFIX:-web_stream}
+      REDIS_CACHE_TTL_SECONDS:       ${REDIS_CACHE_TTL_SECONDS:-300}
+      STREAM_BIND_IP:                ${STREAM_BIND_IP:-false}
+      STREAM_BIND_USER_AGENT:        ${STREAM_BIND_USER_AGENT:-false}
+      JOB_WORKER_CONCURRENCY:        ${JOB_WORKER_CONCURRENCY:-2}
+      JOB_MAX_RETRIES:               ${JOB_MAX_RETRIES:-3}
+      CLEANUP_ENABLED:               ${CLEANUP_ENABLED:-true}
+      CLEANUP_INTERVAL:              ${CLEANUP_INTERVAL:-15m}
+    volumes:
+      - storage_data_prod:/app/storage
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    mem_limit: ${API_MEM_LIMIT:-1g}
+    cpus: ${API_CPUS:-1.5}
+    # No published host ports — only nginx fronts the public network.
+
+  # One-shot admin seeder. Invoke explicitly after migrations:
+  #   docker compose --env-file .env.production -f docker-compose.prod.yml run --rm seed-admin
+  #
+  # The command is idempotent: if ADMIN_EMAIL already exists, it exits
+  # successfully without changing the password or creating duplicates.
+  seed-admin:
+    build:
+      context: ./video-storage-api
+      dockerfile: Dockerfile.prod
+    container_name: video_storage_seed_admin_prod
+    profiles: ["tools"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV:  production
+      GIN_MODE: release
+
+      DB_HOST:     postgres
+      DB_PORT:     "5432"
+      DB_USER:     ${DB_USER:-video_user}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_NAME:     ${DB_NAME:-video_storage}
+      DB_SSLMODE:  ${DB_SSLMODE:-disable}
+      DB_MAX_CONNS: "5"
+
+      JWT_SECRET:            ${JWT_SECRET:?JWT_SECRET is required}
+      STREAM_SIGNING_SECRET: ${STREAM_SIGNING_SECRET:?STREAM_SIGNING_SECRET is required}
+      ALLOWED_STREAM_DOMAINS: ${ALLOWED_STREAM_DOMAINS:?ALLOWED_STREAM_DOMAINS is required}
+      ALLOWED_CORS_ORIGINS:   ${ALLOWED_CORS_ORIGINS:?ALLOWED_CORS_ORIGINS is required}
+
+      ADMIN_EMAIL:        ${ADMIN_EMAIL:?ADMIN_EMAIL is required}
+      ADMIN_PASSWORD:     ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      ADMIN_DISPLAY_NAME: ${ADMIN_DISPLAY_NAME:?ADMIN_DISPLAY_NAME is required}
+    volumes:
+      - storage_data_prod:/app/storage
+    networks:
+      - internal
+    entrypoint: ["/app/seed-admin"]
+
+  dashboard:
+    build:
+      context: ./admin-dashboard
+      dockerfile: Dockerfile.prod
+      args:
+        # NEXT_PUBLIC_* are baked into the client bundle at build time;
+        # they MUST be provided here, not via runtime environment.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-}
+        NEXT_PUBLIC_BASE_PATH:    ${ADMIN_BASE_PATH:-/control-9x7k-admin-panel}
+    container_name: video_storage_dashboard_prod
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/control-9x7k-admin-panel/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    mem_limit: ${DASHBOARD_MEM_LIMIT:-512m}
+    cpus: ${DASHBOARD_CPUS:-1.0}
+
+  worker:
+    build:
+      context: ./video-storage-api
+      dockerfile: Dockerfile.prod
+    container_name: video_storage_worker_prod
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      APP_ENV:  production
+      GIN_MODE: release
+      DB_HOST:     postgres
+      DB_PORT:     "5432"
+      DB_USER:     ${DB_USER:-video_user}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_NAME:     ${DB_NAME:-video_storage}
+      DB_SSLMODE:  ${DB_SSLMODE:-disable}
+      DB_MAX_CONNS: "5"
+      JWT_SECRET:            ${JWT_SECRET:?JWT_SECRET is required}
+      STREAM_SIGNING_SECRET: ${STREAM_SIGNING_SECRET:?STREAM_SIGNING_SECRET is required}
+      STREAM_URL_EXPIRATION_MINUTES: ${STREAM_URL_EXPIRATION_MINUTES:-15}
+      ALLOWED_STREAM_DOMAINS: ${ALLOWED_STREAM_DOMAINS:?ALLOWED_STREAM_DOMAINS is required}
+      ALLOWED_CORS_ORIGINS:   ${ALLOWED_CORS_ORIGINS:?ALLOWED_CORS_ORIGINS is required}
+      VIDEO_STORAGE_PATH:     /app/storage/private/videos
+      THUMBNAIL_STORAGE_PATH: /app/storage/private/thumbnails
+      HLS_STORAGE_PATH:       /app/storage/private/hls
+      HLS_SEGMENT_SECONDS:    ${HLS_SEGMENT_SECONDS:-4}
+      HLS_X264_PRESET:        ${HLS_X264_PRESET:-veryfast}
+      HLS_CONVERT_TIMEOUT:    ${HLS_CONVERT_TIMEOUT:-60m}
+      REDIS_ENABLED:          ${REDIS_ENABLED:-true}
+      REDIS_ADDR:             ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD:         ${REDIS_PASSWORD:-}
+      REDIS_DB:               ${REDIS_DB:-0}
+      REDIS_KEY_PREFIX:       ${REDIS_KEY_PREFIX:-web_stream}
+      JOB_WORKER_CONCURRENCY: ${JOB_WORKER_CONCURRENCY:-2}
+      JOB_MAX_RETRIES:        ${JOB_MAX_RETRIES:-3}
+      CLEANUP_ENABLED:        ${CLEANUP_ENABLED:-true}
+      CLEANUP_INTERVAL:       ${CLEANUP_INTERVAL:-15m}
+      CLEANUP_TEMP_HLS_MAX_AGE: ${CLEANUP_TEMP_HLS_MAX_AGE:-24h}
+      CLEANUP_LOG_MAX_AGE:      ${CLEANUP_LOG_MAX_AGE:-168h}
+      CLEANUP_ARTIFACT_MAX_AGE: ${CLEANUP_ARTIFACT_MAX_AGE:-168h}
+    volumes:
+      - storage_data_prod:/app/storage
+    networks:
+      - internal
+    entrypoint: ["/app/worker"]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f '/app/worker' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: ${WORKER_MEM_LIMIT:-1g}
+    cpus: ${WORKER_CPUS:-1.0}
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: video_storage_nginx_prod
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      dashboard:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      ADMIN_BASE_PATH: ${ADMIN_BASE_PATH:-/control-9x7k-admin-panel}
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
+      - nginx_cache_prod:/var/cache/nginx
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    mem_limit: ${NGINX_MEM_LIMIT:-256m}
+    cpus: ${NGINX_CPUS:-0.5}
+
+  # One-shot migration runner. Invoke explicitly:
+  #   docker compose --env-file .env.production -f docker-compose.prod.yml run --rm migrate up
+  migrate:
+    image: migrate/migrate:v4.17.1
+    container_name: video_storage_migrate_prod
+    profiles: ["tools"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./video-storage-api/migrations:/migrations
+    networks:
+      - internal
+    entrypoint:
+      - migrate
+      - -path=/migrations
+      - -database=postgres://${DB_USER:-video_user}:${DB_PASSWORD:?DB_PASSWORD is required}@postgres:5432/${DB_NAME:-video_storage}?sslmode=${DB_SSLMODE:-disable}
+    command: ["up"]
+
+volumes:
+  postgres_data_prod:
+  redis_data_prod:
+  storage_data_prod:
+  nginx_cache_prod:
+
+networks:
+  internal:
+    driver: bridge
