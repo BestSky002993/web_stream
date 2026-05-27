@@ -74,11 +74,13 @@ func (h *Handler) Create(c *gin.Context) {
 	log.Printf("videos: upload received request_id=%s admin_id=%s original_name=%q size=%d content_length=%d title=%q category_id=%s",
 		reqID, admin.ID, videoHeader.Filename, videoHeader.Size, c.Request.ContentLength, req.Title, req.CategoryID)
 
+	categoryIDs := categoryIDsFromForm(c, req.CategoryID)
 	created, err := h.svc.Create(c.Request.Context(), CreateParams{
 		Title:             req.Title,
 		Slug:              req.Slug,
 		Description:       req.Description,
 		CategoryID:        req.CategoryID,
+		CategoryIDs:       categoryIDs,
 		Visibility:        req.Visibility,
 		ThumbnailSecond:   thumbSec,
 		UploadedByAdminID: admin.ID,
@@ -101,14 +103,14 @@ func (h *Handler) List(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.Query("limit"))
 
 	result, err := h.svc.List(c.Request.Context(), ListParams{
-		Page:       page,
-		Limit:      limit,
-		Search:     c.Query("search"),
-		CategoryID: c.Query("category_id"),
-		Status:     c.Query("status"),
-		Visibility: c.Query("visibility"),
+		Page:              page,
+		Limit:             limit,
+		Search:            c.Query("search"),
+		CategoryID:        c.Query("category_id"),
+		Status:            c.Query("status"),
+		Visibility:        c.Query("visibility"),
 		NotApprovedSiteID: c.Query("not_approved_site_id"),
-		Sort:       c.Query("sort"),
+		Sort:              c.Query("sort"),
 	})
 	if err != nil {
 		writeServiceError(c, err)
@@ -151,6 +153,7 @@ func (h *Handler) Update(c *gin.Context) {
 		Slug:        req.Slug,
 		Description: req.Description,
 		CategoryID:  req.CategoryID,
+		CategoryIDs: categoryIDsFromForm(c, req.CategoryID),
 		Status:      req.Status,
 		Visibility:  req.Visibility,
 	}
@@ -206,6 +209,20 @@ func multipartFile(fh *multipart.FileHeader) UploadFile {
 			return fh.Open()
 		},
 	}
+}
+
+func categoryIDsFromForm(c *gin.Context, legacyID string) []string {
+	values := append([]string{}, c.PostFormArray("category_ids")...)
+	values = append(values, c.PostFormArray("category_ids[]")...)
+	if raw := strings.TrimSpace(c.PostForm("category_ids")); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			values = append(values, strings.TrimSpace(part))
+		}
+	}
+	if len(values) == 0 && legacyID != "" {
+		values = append(values, legacyID)
+	}
+	return values
 }
 
 // writeServiceError maps typed errors to HTTP responses.

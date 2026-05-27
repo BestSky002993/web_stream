@@ -3,7 +3,7 @@
 import * as React from 'react';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 import { cn } from '@/lib/utils/cn';
-import { menuDestructiveItemClass, menuItemClass, menuMutedTextClass, menuSeparatorClass, menuSurfaceClass } from './menu-styles';
+import { menuDestructiveItemClass, menuFocusRingClass, menuItemClass, menuMutedTextClass, menuSeparatorClass, menuSurfaceClass } from './menu-styles';
 
 export const DropdownMenu = DropdownMenuPrimitive.Root;
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
@@ -43,8 +43,9 @@ export const DropdownMenuItem = React.forwardRef<
 	<DropdownMenuPrimitive.Item
 		ref={ref}
 		className={cn(
-			'relative flex cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors',
-			'data-[disabled]:pointer-events-none data-[disabled]:text-zinc-500',
+			'relative flex cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-2 text-sm outline-none',
+			'data-[disabled]:pointer-events-none data-[disabled]:text-zinc-500 data-[disabled]:hover:bg-transparent',
+			menuFocusRingClass,
 			destructive ? menuDestructiveItemClass : menuItemClass,
 			className,
 		)}

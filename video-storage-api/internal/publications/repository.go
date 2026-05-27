@@ -3,6 +3,7 @@ package publications
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -66,6 +67,20 @@ const publicationReturningColumns = `
 
 const publicationVideoColumns = `
     v.id, v.category_id, c.name AS category_name,
+    ARRAY(
+        SELECT c2.id::text
+        FROM video_category_assignments vca
+        INNER JOIN categories c2 ON c2.id = vca.category_id
+        WHERE vca.video_id = v.id
+        ORDER BY (vca.category_id = v.category_id) DESC, c2.sort_order ASC, c2.name ASC
+    ) AS category_ids,
+    ARRAY(
+        SELECT c2.name
+        FROM video_category_assignments vca
+        INNER JOIN categories c2 ON c2.id = vca.category_id
+        WHERE vca.video_id = v.id
+        ORDER BY (vca.category_id = v.category_id) DESC, c2.sort_order ASC, c2.name ASC
+    ) AS category_names,
     v.title, v.slug, v.description,
     v.status, v.visibility,
     v.video_filename, v.video_original_name, v.video_mime_type, v.video_size_bytes,
@@ -141,14 +156,28 @@ func (r *Repository) BulkUpsertForSite(ctx context.Context, in BulkUpsertInput) 
                 SELECT 1 FROM site_video_publications p
                 WHERE p.site_id = $2 AND p.video_id = $1 AND p.deleted_at IS NULL
             ) AS publication_exists,
-            m.id IS NOT NULL AS mapping_exists,
-            COALESCE(m.enabled, FALSE) AS mapping_enabled,
-            COALESCE(m.sync_mode, 'block') AS mapping_sync_mode,
-            COALESCE(m.confirmed_by_wp, FALSE) AS confirmed_by_wp,
-            COALESCE(m.confirmed_by_stream, FALSE) AS confirmed_by_stream
+            EXISTS (
+                SELECT 1
+                FROM video_category_assignments vca
+                INNER JOIN site_category_mappings m
+                    ON m.site_id = $2 AND m.backend_category_id = vca.category_id
+                WHERE vca.video_id = v.id
+                  AND m.remote_category_id IS NOT NULL
+                  AND m.enabled = TRUE
+                  AND m.sync_mode <> 'block'
+            ) AS mapping_allows_distribution,
+            EXISTS (
+                SELECT 1
+                FROM video_category_assignments vca
+                INNER JOIN site_category_mappings m
+                    ON m.site_id = $2 AND m.backend_category_id = vca.category_id
+                WHERE vca.video_id = v.id
+                  AND m.remote_category_id IS NOT NULL
+                  AND m.enabled = TRUE
+                  AND m.sync_mode <> 'block'
+                  AND (m.confirmed_by_wp = FALSE OR m.confirmed_by_stream = FALSE)
+            ) AS mapping_unconfirmed
         FROM videos v
-        LEFT JOIN site_category_mappings m
-            ON m.site_id = $2 AND m.backend_category_id = v.category_id
         WHERE v.id = $1 AND v.deleted_at IS NULL
         LIMIT 1
     `
@@ -163,16 +192,12 @@ func (r *Repository) BulkUpsertForSite(ctx context.Context, in BulkUpsertInput) 
     `
 
 	for _, videoID := range in.VideoIDs {
-		var videoExists, publicationExists, mappingExists, mappingEnabled, confirmedByWP, confirmedByStream bool
-		var mappingSyncMode string
+		var videoExists, publicationExists, mappingAllowsDistribution, mappingUnconfirmed bool
 		err := tx.QueryRow(ctx, inspectQuery, videoID, in.SiteID).Scan(
 			&videoExists,
 			&publicationExists,
-			&mappingExists,
-			&mappingEnabled,
-			&mappingSyncMode,
-			&confirmedByWP,
-			&confirmedByStream,
+			&mappingAllowsDistribution,
+			&mappingUnconfirmed,
 		)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -190,7 +215,7 @@ func (r *Repository) BulkUpsertForSite(ctx context.Context, in BulkUpsertInput) 
 
 		effectiveStatus := in.Status
 		effectiveSyncMode := in.SyncMode
-		mappingBlocksApproval := in.Status == StatusApproved && (!mappingExists || !mappingEnabled || mappingSyncMode == categorymappings.SyncModeBlock)
+		mappingBlocksApproval := in.Status == StatusApproved && !mappingAllowsDistribution
 		if mappingBlocksApproval {
 			if in.UnmappedBehavior == "draft" {
 				effectiveStatus = StatusDraft
@@ -202,7 +227,7 @@ func (r *Repository) BulkUpsertForSite(ctx context.Context, in BulkUpsertInput) 
 				continue
 			}
 		}
-		if in.Status == StatusApproved && effectiveSyncMode == categorymappings.SyncModePublish && (!confirmedByWP || !confirmedByStream) {
+		if in.Status == StatusApproved && effectiveSyncMode == categorymappings.SyncModePublish && mappingUnconfirmed {
 			if in.UnmappedBehavior == "draft" {
 				effectiveStatus = StatusDraft
 				effectiveSyncMode = categorymappings.SyncModeDraft
@@ -242,6 +267,28 @@ func (r *Repository) VideoCategoryID(ctx context.Context, videoID string) (strin
 	return categoryID, nil
 }
 
+func (r *Repository) VideoCategoryIDs(ctx context.Context, videoID string) ([]string, error) {
+	const query = `
+        SELECT COALESCE(
+            array_agg(vca.category_id::text ORDER BY (vca.category_id = v.category_id) DESC)
+                FILTER (WHERE vca.category_id IS NOT NULL),
+            ARRAY[v.category_id::text]
+        )
+        FROM videos v
+        LEFT JOIN video_category_assignments vca ON vca.video_id = v.id
+        WHERE v.id = $1 AND v.deleted_at IS NULL
+        GROUP BY v.id, v.category_id
+    `
+	var ids []string
+	if err := r.pool.QueryRow(ctx, query, videoID).Scan(&ids); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("find publication video categories: %w", err)
+	}
+	return ids, nil
+}
+
 func (r *Repository) GetBySiteVideo(ctx context.Context, siteID, videoID string) (*Publication, error) {
 	const query = `
         SELECT ` + publicationColumns + `
@@ -270,11 +317,21 @@ type DistributionRow struct {
 	MappingEnabled     bool
 	RemoteCategoryID   *string
 	RemoteCategoryName *string
+	CategoryMappings   []DistributionCategoryMapping
+}
+
+type DistributionCategoryMapping struct {
+	CategoryID         string  `json:"category_id"`
+	CategoryName       string  `json:"category_name"`
+	MappingStatus      string  `json:"mapping_status"`
+	MappingSyncMode    string  `json:"mapping_sync_mode"`
+	MappingEnabled     bool    `json:"mapping_enabled"`
+	RemoteCategoryID   *string `json:"remote_category_id"`
+	RemoteCategoryName *string `json:"remote_category_name"`
 }
 
 func (r *Repository) ListSiteDistribution(ctx context.Context, videoID string) ([]DistributionRow, error) {
-	categoryID, err := r.VideoCategoryID(ctx, videoID)
-	if err != nil {
+	if _, err := r.VideoCategoryIDs(ctx, videoID); err != nil {
 		return nil, err
 	}
 	const query = `
@@ -283,20 +340,63 @@ func (r *Repository) ListSiteDistribution(ctx context.Context, videoID string) (
             p.id, p.site_id, p.video_id, p.status, p.sync_mode, p.remote_post_id, p.remote_slug,
             p.category_mapping, COALESCE(p.tags, '{}'::text[]), p.notes, p.last_synced_at,
             p.created_at, p.updated_at, p.deleted_at,
-            m.remote_category_id, m.enabled, m.sync_mode,
-            m.confirmed_by_wp, m.confirmed_by_stream,
-            rc.remote_name
+            best.remote_category_id, best.enabled, best.sync_mode,
+            best.confirmed_by_wp, best.confirmed_by_stream,
+            best.remote_name,
+            COALESCE(cm.category_mappings, '[]'::jsonb)
         FROM sites s
         LEFT JOIN site_video_publications p
             ON p.site_id = s.id AND p.video_id = $1 AND p.deleted_at IS NULL
-        LEFT JOIN site_category_mappings m
-            ON m.site_id = s.id AND m.backend_category_id = $2
-        LEFT JOIN site_remote_categories rc
-            ON rc.id = m.remote_category_id AND rc.site_id = s.id
+        LEFT JOIN LATERAL (
+            SELECT
+                m.remote_category_id, m.enabled, m.sync_mode,
+                m.confirmed_by_wp, m.confirmed_by_stream,
+                rc.remote_name
+            FROM video_category_assignments vca
+            INNER JOIN categories c2 ON c2.id = vca.category_id
+            LEFT JOIN site_category_mappings m
+                ON m.site_id = s.id AND m.backend_category_id = vca.category_id
+            LEFT JOIN site_remote_categories rc
+                ON rc.id = m.remote_category_id AND rc.site_id = s.id
+            WHERE vca.video_id = $1
+            ORDER BY
+                (m.remote_category_id IS NOT NULL AND m.enabled = TRUE AND m.sync_mode <> 'block') DESC,
+                (m.remote_category_id IS NOT NULL) DESC,
+                c2.sort_order ASC,
+                c2.name ASC
+            LIMIT 1
+        ) best ON true
+        LEFT JOIN LATERAL (
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'category_id', c2.id::text,
+                    'category_name', c2.name,
+                    'mapping_status',
+                        CASE
+                            WHEN m.remote_category_id IS NULL THEN 'unmapped'
+                            WHEN m.enabled = FALSE THEN 'disabled'
+                            WHEN m.confirmed_by_wp = FALSE OR m.confirmed_by_stream = FALSE THEN 'unconfirmed'
+                            ELSE 'mapped'
+                        END,
+                    'mapping_sync_mode', COALESCE(m.sync_mode, 'block'),
+                    'mapping_enabled', COALESCE(m.enabled, FALSE),
+                    'remote_category_id', m.remote_category_id,
+                    'remote_category_name', rc.remote_name
+                )
+                ORDER BY c2.sort_order ASC, c2.name ASC
+            ) AS category_mappings
+            FROM video_category_assignments vca
+            INNER JOIN categories c2 ON c2.id = vca.category_id
+            LEFT JOIN site_category_mappings m
+                ON m.site_id = s.id AND m.backend_category_id = vca.category_id
+            LEFT JOIN site_remote_categories rc
+                ON rc.id = m.remote_category_id AND rc.site_id = s.id
+            WHERE vca.video_id = $1
+        ) cm ON true
         WHERE s.deleted_at IS NULL
         ORDER BY s.name ASC, s.domain ASC
     `
-	rows, err := r.pool.Query(ctx, query, videoID, categoryID)
+	rows, err := r.pool.Query(ctx, query, videoID)
 	if err != nil {
 		return nil, fmt.Errorf("list site distribution: %w", err)
 	}
@@ -432,7 +532,12 @@ func (r *Repository) ListApprovedVideos(ctx context.Context, siteID string, f vi
           AND v.visibility = 'public'
           AND c.deleted_at IS NULL
           AND ($2::text IS NULL OR (v.title ILIKE $2 OR v.slug ILIKE $2))
-          AND ($3::uuid IS NULL OR v.category_id = $3)
+          AND (
+              $3::uuid IS NULL OR EXISTS (
+                  SELECT 1 FROM video_category_assignments vca
+                  WHERE vca.video_id = v.id AND vca.category_id = $3
+              )
+          )
         ` + orderClause + `
         LIMIT $4 OFFSET $5
     `
@@ -494,9 +599,10 @@ func (r *Repository) IsPlayableForSite(ctx context.Context, siteID, videoID stri
             SELECT 1
             FROM site_video_publications p
             INNER JOIN videos v ON v.id = p.video_id
+            INNER JOIN video_category_assignments vca ON vca.video_id = v.id
             INNER JOIN site_category_mappings m
                 ON m.site_id = p.site_id
-               AND m.backend_category_id = v.category_id
+               AND m.backend_category_id = vca.category_id
             WHERE p.deleted_at IS NULL
               AND p.site_id = $1
               AND p.video_id = $2
@@ -612,11 +718,13 @@ func scanPublicationWithVideoAndTotal(row scanner) (*Publication, int, error) {
 func scanPublicationPrefixWithVideo(row scanner, total *int) (*Publication, error) {
 	var p Publication
 	var v videos.Video
+	var categoryIDs, categoryNames []string
 	dest := []any{
 		&p.ID, &p.SiteID, &p.VideoID, &p.Status, &p.SyncMode, &p.RemotePostID, &p.RemoteSlug,
 		&p.CategoryMapping, &p.Tags, &p.Notes, &p.LastSyncedAt,
 		&p.CreatedAt, &p.UpdatedAt, &p.DeletedAt,
 		&v.ID, &v.CategoryID, &v.CategoryName,
+		&categoryIDs, &categoryNames,
 		&v.Title, &v.Slug, &v.Description,
 		&v.Status, &v.Visibility,
 		&v.VideoFilename, &v.VideoOriginalName, &v.VideoMimeType, &v.VideoSizeBytes,
@@ -631,6 +739,16 @@ func scanPublicationPrefixWithVideo(row scanner, total *int) (*Publication, erro
 	if err := row.Scan(dest...); err != nil {
 		return nil, fmt.Errorf("scan publication row: %w", err)
 	}
+	for i, id := range categoryIDs {
+		name := ""
+		if i < len(categoryNames) {
+			name = categoryNames[i]
+		}
+		v.Categories = append(v.Categories, videos.VideoCategory{ID: id, Name: name})
+	}
+	if len(v.Categories) == 0 && v.CategoryID != "" {
+		v.Categories = append(v.Categories, videos.VideoCategory{ID: v.CategoryID, Name: v.CategoryName})
+	}
 	p.Video = &v
 	return &p, nil
 }
@@ -643,6 +761,7 @@ func scanDistributionRow(row scanner) (*DistributionRow, error) {
 	var pTags []string
 	var remoteCategoryID, mappingSyncMode, remoteCategoryName sql.NullString
 	var mappingEnabled, confirmedByWP, confirmedByStream sql.NullBool
+	var categoryMappingsJSON []byte
 	if err := row.Scan(
 		&out.SiteID, &out.SiteName, &out.SiteDomain, &out.SiteStatus,
 		&pID, &pSiteID, &pVideoID, &pStatus, &pSyncMode, &pRemotePostID, &pRemoteSlug,
@@ -651,6 +770,7 @@ func scanDistributionRow(row scanner) (*DistributionRow, error) {
 		&remoteCategoryID, &mappingEnabled, &mappingSyncMode,
 		&confirmedByWP, &confirmedByStream,
 		&remoteCategoryName,
+		&categoryMappingsJSON,
 	); err != nil {
 		return nil, fmt.Errorf("scan distribution row: %w", err)
 	}
@@ -702,6 +822,11 @@ func scanDistributionRow(row scanner) (*DistributionRow, error) {
 			out.MappingStatus = categorymappings.MappingStatusUnconfirmed
 		} else if remoteCategoryID.Valid {
 			out.MappingStatus = categorymappings.MappingStatusMapped
+		}
+	}
+	if len(categoryMappingsJSON) > 0 {
+		if err := json.Unmarshal(categoryMappingsJSON, &out.CategoryMappings); err != nil {
+			return nil, fmt.Errorf("scan distribution category mappings: %w", err)
 		}
 	}
 	return &out, nil

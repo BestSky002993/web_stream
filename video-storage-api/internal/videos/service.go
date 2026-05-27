@@ -65,6 +65,7 @@ type CreateParams struct {
 	Slug              string
 	Description       string
 	CategoryID        string
+	CategoryIDs       []string
 	Visibility        string
 	ThumbnailSecond   int
 	UploadedByAdminID string
@@ -104,13 +105,18 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*Video, error) {
 		return nil, ErrInvalidThumbnailSecond
 	}
 
-	exists, err := s.repo.CategoryExists(ctx, p.CategoryID)
+	categoryIDs := normalizeCategoryIDs(p.CategoryIDs, p.CategoryID)
+	if len(categoryIDs) == 0 {
+		return nil, ErrCategoryNotFound
+	}
+	count, err := s.repo.ActiveCategoryCount(ctx, categoryIDs)
 	if err != nil {
 		return nil, fmt.Errorf("category check: %w", err)
 	}
-	if !exists {
+	if count != len(categoryIDs) {
 		return nil, ErrCategoryNotFound
 	}
+	primaryCategoryID := categoryIDs[0]
 
 	if p.Video.Size > s.maxV {
 		return nil, ErrVideoTooLarge
@@ -142,7 +148,8 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*Video, error) {
 	}
 
 	v, err := s.repo.Insert(ctx, InsertInput{
-		CategoryID:        p.CategoryID,
+		CategoryID:        primaryCategoryID,
+		CategoryIDs:       categoryIDs,
 		Title:             title,
 		Slug:              slug,
 		Description:       desc,
@@ -221,6 +228,7 @@ type UpdateParams struct {
 	Slug            string
 	Description     string
 	CategoryID      string
+	CategoryIDs     []string
 	Status          string
 	Visibility      string
 	ThumbnailSecond *int
@@ -255,15 +263,18 @@ func (s *Service) Update(ctx context.Context, id string, p UpdateParams) (*Video
 		in.Description = &desc
 	}
 
-	if p.CategoryID != "" {
-		exists, err := s.repo.CategoryExists(ctx, p.CategoryID)
+	categoryIDs := normalizeCategoryIDs(p.CategoryIDs, p.CategoryID)
+	if len(categoryIDs) > 0 {
+		count, err := s.repo.ActiveCategoryCount(ctx, categoryIDs)
 		if err != nil {
 			return nil, fmt.Errorf("category check: %w", err)
 		}
-		if !exists {
+		if count != len(categoryIDs) {
 			return nil, ErrCategoryNotFound
 		}
-		in.CategoryID = &p.CategoryID
+		in.CategoryID = &categoryIDs[0]
+		in.CategoryIDs = categoryIDs
+		in.UpdateCategories = true
 	}
 
 	if p.Status != "" {
@@ -443,6 +454,30 @@ func trimDescription(d string) *string {
 		return nil
 	}
 	return &d
+}
+
+func normalizeCategoryIDs(ids []string, legacyID string) []string {
+	out := make([]string, 0, len(ids)+1)
+	seen := map[string]struct{}{}
+	appendID := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		key := strings.ToLower(id)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, id)
+	}
+	for _, id := range ids {
+		appendID(id)
+	}
+	if len(out) == 0 {
+		appendID(legacyID)
+	}
+	return out
 }
 
 // sanitizeOriginalName strips control characters and clamps the length

@@ -359,11 +359,20 @@ func (s *Service) MappingStatusForPublications(ctx context.Context, siteID strin
 		if pubs[i].Video == nil || pubs[i].Video.CategoryID == "" {
 			continue
 		}
-		if _, ok := seen[pubs[i].Video.CategoryID]; ok {
-			continue
+		cats := pubs[i].Video.Categories
+		if len(cats) == 0 {
+			cats = []videos.VideoCategory{{ID: pubs[i].Video.CategoryID, Name: pubs[i].Video.CategoryName}}
 		}
-		seen[pubs[i].Video.CategoryID] = struct{}{}
-		ids = append(ids, pubs[i].Video.CategoryID)
+		for _, cat := range cats {
+			if cat.ID == "" {
+				continue
+			}
+			if _, ok := seen[cat.ID]; ok {
+				continue
+			}
+			seen[cat.ID] = struct{}{}
+			ids = append(ids, cat.ID)
+		}
 	}
 	cacheKey := fmt.Sprintf("category_mappings:site=%s:ids=%s", siteID, strings.Join(ids, ","))
 	if s.cache != nil {

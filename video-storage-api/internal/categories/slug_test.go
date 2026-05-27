@@ -15,11 +15,11 @@ func TestNormalizeSlug(t *testing.T) {
 		{"a---b", "a-b"},
 		{"foo/bar/baz", "foo-bar-baz"},
 		{"with 123 numbers", "with-123-numbers"},
-		{"café", "caf"},   // non-ASCII letters are stripped
-		{"한글", ""},       // entirely non-ASCII collapses to empty
-		{"  ", ""},        // only whitespace
-		{"-----", ""},     // only separators
-		{"!@#$%", ""},     // only punctuation
+		{"café", "caf"}, // non-ASCII letters are stripped
+		{"한글", ""},      // entirely non-ASCII collapses to empty
+		{"  ", ""},      // only whitespace
+		{"-----", ""},   // only separators
+		{"!@#$%", ""},   // only punctuation
 		{"already-clean", "already-clean"},
 	}
 

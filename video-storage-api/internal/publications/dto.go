@@ -31,15 +31,17 @@ type PublicationResponse struct {
 }
 
 type PublicationVideo struct {
-	ID              string              `json:"id"`
-	Title           string              `json:"title"`
-	Slug            string              `json:"slug"`
-	Description     *string             `json:"description"`
-	Category        PublicationCategory `json:"category"`
-	Status          string              `json:"status"`
-	Visibility      string              `json:"visibility"`
-	DurationSeconds *int                `json:"duration_seconds"`
-	UpdatedAt       time.Time           `json:"updated_at"`
+	ID              string                `json:"id"`
+	Title           string                `json:"title"`
+	Slug            string                `json:"slug"`
+	Description     *string               `json:"description"`
+	Category        PublicationCategory   `json:"category"`
+	Categories      []PublicationCategory `json:"categories"`
+	CategoryIDs     []string              `json:"category_ids"`
+	Status          string                `json:"status"`
+	Visibility      string                `json:"visibility"`
+	DurationSeconds *int                  `json:"duration_seconds"`
+	UpdatedAt       time.Time             `json:"updated_at"`
 }
 
 type PublicationCategory struct {
@@ -66,10 +68,10 @@ type BulkDistributionRequest struct {
 }
 
 type BulkDistributionResponse struct {
-	Approved int                      `json:"approved"`
-	Updated  int                      `json:"updated"`
-	Skipped  int                      `json:"skipped"`
-	Errors   []BulkDistributionError  `json:"errors"`
+	Approved int                       `json:"approved"`
+	Updated  int                       `json:"updated"`
+	Skipped  int                       `json:"skipped"`
+	Errors   []BulkDistributionError   `json:"errors"`
 	Warnings []BulkDistributionWarning `json:"warnings,omitempty"`
 }
 
@@ -84,22 +86,23 @@ type BulkDistributionWarning struct {
 }
 
 type SiteDistributionRow struct {
-	SiteID             string               `json:"site_id"`
-	SiteName           string               `json:"site_name"`
-	SiteDomain         string               `json:"site_domain"`
-	SiteStatus         string               `json:"site_status"`
-	PublicationID      *string              `json:"publication_id"`
-	Status             string               `json:"status"`
-	SyncMode           string               `json:"sync_mode"`
-	EffectiveSyncMode  string               `json:"effective_sync_mode"`
-	MappingStatus      string               `json:"mapping_status"`
-	MappingSyncMode    string               `json:"mapping_sync_mode"`
-	MappingEnabled     bool                 `json:"mapping_enabled"`
-	RemoteCategoryID   *string              `json:"remote_category_id"`
-	RemoteCategoryName *string              `json:"remote_category_name"`
-	Warnings           []string             `json:"warnings"`
-	UpdatedAt          *time.Time           `json:"updated_at"`
-	Publication        *PublicationResponse `json:"publication,omitempty"`
+	SiteID             string                        `json:"site_id"`
+	SiteName           string                        `json:"site_name"`
+	SiteDomain         string                        `json:"site_domain"`
+	SiteStatus         string                        `json:"site_status"`
+	PublicationID      *string                       `json:"publication_id"`
+	Status             string                        `json:"status"`
+	SyncMode           string                        `json:"sync_mode"`
+	EffectiveSyncMode  string                        `json:"effective_sync_mode"`
+	MappingStatus      string                        `json:"mapping_status"`
+	MappingSyncMode    string                        `json:"mapping_sync_mode"`
+	MappingEnabled     bool                          `json:"mapping_enabled"`
+	RemoteCategoryID   *string                       `json:"remote_category_id"`
+	RemoteCategoryName *string                       `json:"remote_category_name"`
+	CategoryMappings   []DistributionCategoryMapping `json:"category_mappings"`
+	Warnings           []string                      `json:"warnings"`
+	UpdatedAt          *time.Time                    `json:"updated_at"`
+	Publication        *PublicationResponse          `json:"publication,omitempty"`
 }
 
 type SiteDistributionResponse struct {
@@ -135,6 +138,16 @@ func ToResponse(p *Publication) PublicationResponse {
 		UpdatedAt:       p.UpdatedAt,
 	}
 	if p.Video != nil {
+		categories := make([]PublicationCategory, 0, len(p.Video.Categories))
+		categoryIDs := make([]string, 0, len(p.Video.Categories))
+		for _, c := range p.Video.Categories {
+			categories = append(categories, PublicationCategory{ID: c.ID, Name: c.Name})
+			categoryIDs = append(categoryIDs, c.ID)
+		}
+		if len(categories) == 0 && p.Video.CategoryID != "" {
+			categories = append(categories, PublicationCategory{ID: p.Video.CategoryID, Name: p.Video.CategoryName})
+			categoryIDs = append(categoryIDs, p.Video.CategoryID)
+		}
 		r.Video = &PublicationVideo{
 			ID:          p.Video.ID,
 			Title:       p.Video.Title,
@@ -144,6 +157,8 @@ func ToResponse(p *Publication) PublicationResponse {
 				ID:   p.Video.CategoryID,
 				Name: p.Video.CategoryName,
 			},
+			Categories:      categories,
+			CategoryIDs:     categoryIDs,
 			Status:          p.Video.Status,
 			Visibility:      p.Video.Visibility,
 			DurationSeconds: p.Video.DurationSeconds,

@@ -414,6 +414,7 @@ func (h *Handler) SiteIssueSignedURL(c *gin.Context) {
 
 // toPublicResponse converts a Video into the public JSON shape.
 func (h *Handler) toPublicResponse(c *gin.Context, v *videos.Video) PublicVideoResponse {
+	categories, categoryIDs := publicCategories(v)
 	return PublicVideoResponse{
 		ID:          v.ID,
 		Title:       v.Title,
@@ -423,6 +424,8 @@ func (h *Handler) toPublicResponse(c *gin.Context, v *videos.Video) PublicVideoR
 			ID:   v.CategoryID,
 			Name: v.CategoryName,
 		},
+		Categories:      categories,
+		CategoryIDs:     categoryIDs,
 		ThumbnailURL:    urlutil.ThumbnailURL(c, h.cfg.PublicBaseURL, v.ID),
 		DurationSeconds: v.DurationSeconds,
 		ViewsCount:      v.ViewsCount,
@@ -450,7 +453,33 @@ func (h *Handler) toSyncResponseList(c *gin.Context, pubs []publications.Publica
 		mappingStatus := categorymappings.MappingStatusUnmapped
 		syncMode := categorymappings.SyncModeBlock
 		var mappedRemote *SyncRemoteCategory
-		if row, ok := mappingRows[v.CategoryID]; ok {
+		categories, categoryIDs := publicCategories(v)
+		selectedCategoryID := v.CategoryID
+		selectedCategoryName := v.CategoryName
+		if len(categories) > 0 {
+			selectedCategoryID = categories[0].ID
+			selectedCategoryName = categories[0].Name
+		}
+		var selectedRow *categorymappings.MappingRow
+		for _, cat := range categories {
+			if row, ok := mappingRows[cat.ID]; ok {
+				if selectedRow == nil {
+					rowCopy := row
+					selectedRow = &rowCopy
+					selectedCategoryID = cat.ID
+					selectedCategoryName = cat.Name
+				}
+				if row.Status == categorymappings.MappingStatusMapped {
+					rowCopy := row
+					selectedRow = &rowCopy
+					selectedCategoryID = cat.ID
+					selectedCategoryName = cat.Name
+					break
+				}
+			}
+		}
+		if selectedRow != nil {
+			row := *selectedRow
 			mappingStatus = row.Status
 			if row.Mapping != nil {
 				syncMode = row.Mapping.SyncMode
@@ -474,9 +503,11 @@ func (h *Handler) toSyncResponseList(c *gin.Context, pubs []publications.Publica
 			Slug:                  v.Slug,
 			Description:           v.Description,
 			ThumbnailURL:          urlutil.ThumbnailURL(c, h.cfg.PublicBaseURL, v.ID),
-			Category:              PublicCategoryBrief{ID: v.CategoryID, Name: v.CategoryName},
-			BackendCategoryID:     v.CategoryID,
-			BackendCategoryName:   v.CategoryName,
+			Category:              PublicCategoryBrief{ID: selectedCategoryID, Name: selectedCategoryName},
+			Categories:            categories,
+			CategoryIDs:           categoryIDs,
+			BackendCategoryID:     selectedCategoryID,
+			BackendCategoryName:   selectedCategoryName,
 			CategoryMappingStatus: mappingStatus,
 			MappedRemoteCategory:  mappedRemote,
 			SyncMode:              syncMode,
@@ -491,6 +522,20 @@ func (h *Handler) toSyncResponseList(c *gin.Context, pubs []publications.Publica
 		})
 	}
 	return out
+}
+
+func publicCategories(v *videos.Video) ([]PublicCategoryBrief, []string) {
+	categories := make([]PublicCategoryBrief, 0, len(v.Categories))
+	categoryIDs := make([]string, 0, len(v.Categories))
+	for _, cat := range v.Categories {
+		categories = append(categories, PublicCategoryBrief{ID: cat.ID, Name: cat.Name})
+		categoryIDs = append(categoryIDs, cat.ID)
+	}
+	if len(categories) == 0 && v.CategoryID != "" {
+		categories = append(categories, PublicCategoryBrief{ID: v.CategoryID, Name: v.CategoryName})
+		categoryIDs = append(categoryIDs, v.CategoryID)
+	}
+	return categories, categoryIDs
 }
 
 func siteIDFromContext(c *gin.Context) string {

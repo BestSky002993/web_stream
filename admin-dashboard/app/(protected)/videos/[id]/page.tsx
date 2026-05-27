@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { ArrowLeft, Eye, Loader2, Send } from 'lucide-react';
 import { PageHeader } from '@/components/page-header';
+import { CategoryMultiSelect } from '@/components/category-multi-select';
 import { StatusBadge } from '@/components/status-badge';
 import { VideoPreviewModal } from '@/components/video-preview-modal';
 import { Button } from '@/components/ui/button';
@@ -36,7 +37,7 @@ export default function VideoEditPage() {
 	const [description, setDescription] = useState('');
 	const [status, setStatus] = useState<string>('');
 	const [visibility, setVisibility] = useState<string>('');
-	const [categoryId, setCategoryId] = useState<string>('');
+	const [categoryIds, setCategoryIds] = useState<string[]>([]);
 	const [thumbSecond, setThumbSecond] = useState<string>('');
 	const [pending, setPending] = useState(false);
 	const [preview, setPreview] = useState(false);
@@ -48,7 +49,7 @@ export default function VideoEditPage() {
 		setDescription(video.description ?? '');
 		setStatus(video.status);
 		setVisibility(video.visibility);
-		setCategoryId(video.category.id);
+		setCategoryIds(video.category_ids?.length ? video.category_ids : [video.category.id]);
 		setThumbSecond(String(video.thumbnail.second));
 	}, [video]);
 
@@ -79,16 +80,24 @@ export default function VideoEditPage() {
 	async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
 		if (!video) return;
+		if (categoryIds.length === 0) {
+			toast.error('Select at least one category.');
+			return;
+		}
 		setPending(true);
 		try {
 			// Build a "changed only" payload — empty strings are no-ops on the backend.
-			const payload: Record<string, string | number | undefined> = {};
+			const payload: Record<string, string | number | string[] | undefined> = {};
 			if (title !== video.title) payload.title = title.trim();
 			if (slug !== video.slug) payload.slug = slug.trim();
 			if (description !== (video.description ?? '')) payload.description = description.trim();
 			if (status !== video.status) payload.status = status;
 			if (visibility !== video.visibility) payload.visibility = visibility;
-			if (categoryId !== video.category.id) payload.category_id = categoryId;
+			const originalCategoryIds = video.category_ids?.length ? video.category_ids : [video.category.id];
+			if (categoryIds.join('|') !== originalCategoryIds.join('|')) {
+				payload.category_id = categoryIds[0];
+				payload.category_ids = categoryIds;
+			}
 			if (Number(thumbSecond) !== video.thumbnail.second) payload.thumbnail_second = Number(thumbSecond);
 
 			if (Object.keys(payload).length === 0) {
@@ -190,15 +199,13 @@ export default function VideoEditPage() {
 								<Textarea id="description" value={description} onChange={(e) => setDescription(e.target.value)} disabled={pending} />
 							</div>
 							<div className="space-y-1.5">
-								<Label>Category</Label>
-								<Select value={categoryId} onValueChange={setCategoryId} disabled={pending}>
-									<SelectTrigger><SelectValue /></SelectTrigger>
-									<SelectContent>
-										{cats?.data.map((c) => (
-											<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
+								<Label>Categories</Label>
+								<CategoryMultiSelect
+									categories={cats?.data ?? []}
+									value={categoryIds}
+									onChange={setCategoryIds}
+									disabled={pending}
+								/>
 							</div>
 							<div className="space-y-1.5">
 								<Label>Status</Label>
@@ -328,7 +335,7 @@ function PublishingPanel({ video, sites, publications }: { video: Video; sites: 
 					</div>
 					<div className="space-y-1.5">
 						<Label htmlFor="category-mapping">Category mapping</Label>
-						<Input id="category-mapping" value={categoryMapping} onChange={(e) => setCategoryMapping(e.target.value)} placeholder={video.category.name} disabled={pending} />
+						<Input id="category-mapping" value={categoryMapping} onChange={(e) => setCategoryMapping(e.target.value)} placeholder={(video.categories ?? [video.category]).map((c) => c.name).join(', ')} disabled={pending} />
 					</div>
 					<div className="space-y-1.5">
 						<Label htmlFor="publication-tags">Tags</Label>

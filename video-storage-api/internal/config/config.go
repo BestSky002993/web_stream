@@ -301,6 +301,27 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// LoadDatabase loads only the database settings. It is intended for small
+// maintenance commands that should not be blocked by unrelated API settings.
+func LoadDatabase() (DatabaseConfig, error) {
+	_ = godotenv.Load()
+
+	maxConns, err := strconv.Atoi(getEnv("DB_MAX_CONNS", "10"))
+	if err != nil {
+		return DatabaseConfig{}, fmt.Errorf("invalid DB_MAX_CONNS: %w", err)
+	}
+
+	return DatabaseConfig{
+		Host:     getEnv("DB_HOST", "localhost"),
+		Port:     getEnv("DB_PORT", "5432"),
+		User:     getEnv("DB_USER", "video_user"),
+		Password: getEnv("DB_PASSWORD", "video_password"),
+		Name:     getEnv("DB_NAME", "video_storage"),
+		SSLMode:  getEnv("DB_SSLMODE", "disable"),
+		MaxConns: int32(maxConns),
+	}, nil
+}
+
 // parseCSV trims and splits a comma-separated env value, dropping empties.
 func parseCSV(raw string) []string {
 	raw = strings.TrimSpace(raw)

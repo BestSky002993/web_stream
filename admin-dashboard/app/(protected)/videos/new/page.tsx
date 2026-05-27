@@ -8,6 +8,7 @@ import { ArrowLeft, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { PageHeader } from '@/components/page-header';
 import { UploadDropzone } from '@/components/upload-dropzone';
+import { CategoryMultiSelect } from '@/components/category-multi-select';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -26,7 +27,7 @@ export default function NewVideoPage() {
 	const [slug, setSlug] = useState('');
 	const [slugTouched, setSlugTouched] = useState(false);
 	const [description, setDescription] = useState('');
-	const [categoryId, setCategoryId] = useState('');
+	const [categoryIds, setCategoryIds] = useState<string[]>([]);
 	const [visibility, setVisibility] = useState<'public' | 'private'>('private');
 	const [thumbSecond, setThumbSecond] = useState('1');
 	const [file, setFile] = useState<File | null>(null);
@@ -34,7 +35,7 @@ export default function NewVideoPage() {
 	const [pending, setPending] = useState(false);
 	const [progress, setProgress] = useState(0);
 
-	const canSubmit = !pending && title.trim() && slug.trim() && categoryId && file !== null;
+	const canSubmit = !pending && title.trim() && slug.trim() && categoryIds.length > 0 && file !== null;
 
 	function onTitleChange(v: string) {
 		setTitle(v);
@@ -53,7 +54,8 @@ export default function NewVideoPage() {
 				title: title.trim(),
 				slug: slug.trim(),
 				description: description.trim() || undefined,
-				category_id: categoryId,
+				category_id: categoryIds[0],
+				category_ids: categoryIds,
 				visibility,
 				thumbnail_second: thumbSecond === '' ? undefined : Number(thumbSecond),
 				video: file,
@@ -129,15 +131,13 @@ export default function NewVideoPage() {
 								<Textarea id="description" value={description} onChange={(e) => setDescription(e.target.value)} disabled={pending} />
 							</div>
 							<div className="space-y-1.5">
-								<Label>Category</Label>
-								<Select value={categoryId} onValueChange={setCategoryId} disabled={pending || catsLoading}>
-									<SelectTrigger><SelectValue placeholder="Select a category" /></SelectTrigger>
-									<SelectContent>
-										{cats?.data.map((c) => (
-											<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
+								<Label>Categories</Label>
+								<CategoryMultiSelect
+									categories={cats?.data ?? []}
+									value={categoryIds}
+									onChange={setCategoryIds}
+									disabled={pending || catsLoading}
+								/>
 							</div>
 							<div className="space-y-1.5">
 								<Label>Visibility</Label>

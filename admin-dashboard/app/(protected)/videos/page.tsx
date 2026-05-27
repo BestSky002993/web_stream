@@ -229,7 +229,7 @@ export default function VideosPage() {
 										<div className="font-medium">{v.title}</div>
 										<div className="text-xs text-muted-foreground">{v.slug}</div>
 									</TableCell>
-									<TableCell className="text-sm">{v.category?.name ?? '—'}</TableCell>
+									<TableCell><CategoryPills categories={v.categories?.length ? v.categories : v.category ? [v.category] : []} /></TableCell>
 									<TableCell><StatusBadge value={v.status} /></TableCell>
 									<TableCell><StatusBadge value={v.visibility} /></TableCell>
 									<TableCell>
@@ -459,6 +459,11 @@ function SiteDistributionModal({
 										<div className="text-xs text-muted-foreground">{selected.site_domain}</div>
 									</div>
 
+									<div className="space-y-2 rounded-md border p-3 text-sm">
+										<div className="font-medium">Video categories</div>
+										<CategoryPills categories={video?.categories?.length ? video.categories : video?.category ? [video.category] : []} />
+									</div>
+
 									<div className="grid grid-cols-2 gap-3">
 										<label className="flex items-center gap-2 rounded-md border p-2 text-sm">
 											<input type="checkbox" checked={status === 'approved'} onChange={(e) => setStatus(e.target.checked ? 'approved' : 'draft')} disabled={pending} />
@@ -508,6 +513,26 @@ function SiteDistributionModal({
 											<span className="max-w-36 truncate">{selected.remote_category_name ?? 'None'}</span>
 										</div>
 									</div>
+
+									{selected.category_mappings?.length > 0 && (
+										<div className="space-y-2 text-sm">
+											<div className="font-medium">Category mappings</div>
+											<div className="rounded-md border">
+												{selected.category_mappings.map((mapping) => (
+													<div key={mapping.category_id} className="flex items-center justify-between gap-3 border-b p-2 last:border-b-0">
+														<div className="min-w-0">
+															<div className="truncate font-medium">{mapping.category_name}</div>
+															<div className="truncate text-xs text-muted-foreground">{mapping.remote_category_name ?? 'No remote category'}</div>
+														</div>
+														<div className="flex shrink-0 items-center gap-2">
+															<StatusBadge value={mapping.mapping_status} />
+															<Badge variant={mapping.mapping_sync_mode === 'block' ? 'warning' : 'secondary'}>{mapping.mapping_sync_mode}</Badge>
+														</div>
+													</div>
+												))}
+											</div>
+										</div>
+									)}
 
 									{selected.warnings.length > 0 && (
 										<div className="rounded-md border border-amber-700 bg-amber-950 p-3 text-xs text-amber-100">
@@ -682,6 +707,17 @@ function BulkDistributionModal({
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+function CategoryPills({ categories }: { categories: Array<{ id: string; name: string }> }) {
+	if (categories.length === 0) return <span className="text-sm text-muted-foreground">—</span>;
+	return (
+		<div className="flex max-w-56 flex-wrap gap-1">
+			{categories.map((category) => (
+				<Badge key={category.id} variant="secondary">{category.name}</Badge>
+			))}
+		</div>
 	);
 }
 

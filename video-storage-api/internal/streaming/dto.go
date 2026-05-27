@@ -9,16 +9,18 @@ import "time"
 // raw storage filenames, the uploader's ID, the on-disk MIME type,
 // the upload size, the random ordering seed, etc.
 type PublicVideoResponse struct {
-	ID              string              `json:"id"`
-	Title           string              `json:"title"`
-	Slug            string              `json:"slug"`
-	Description     *string             `json:"description"`
-	Category        PublicCategoryBrief `json:"category"`
-	ThumbnailURL    string              `json:"thumbnail_url"`
-	DurationSeconds *int                `json:"duration_seconds"`
-	ViewsCount      int64               `json:"views_count"`
-	CreatedAt       time.Time           `json:"created_at"`
-	StreamAvailable bool                `json:"stream_available"`
+	ID              string                `json:"id"`
+	Title           string                `json:"title"`
+	Slug            string                `json:"slug"`
+	Description     *string               `json:"description"`
+	Category        PublicCategoryBrief   `json:"category"`
+	Categories      []PublicCategoryBrief `json:"categories"`
+	CategoryIDs     []string              `json:"category_ids"`
+	ThumbnailURL    string                `json:"thumbnail_url"`
+	DurationSeconds *int                  `json:"duration_seconds"`
+	ViewsCount      int64                 `json:"views_count"`
+	CreatedAt       time.Time             `json:"created_at"`
+	StreamAvailable bool                  `json:"stream_available"`
 }
 
 // PublicCategoryBrief is the minimal category projection inside a public response.
@@ -61,25 +63,27 @@ type SyncRemoteCategory struct {
 }
 
 type SyncVideoResponse struct {
-	VideoID               string              `json:"video_id"`
-	Title                 string              `json:"title"`
-	Slug                  string              `json:"slug"`
-	Description           *string             `json:"description"`
-	ThumbnailURL          string              `json:"thumbnail_url"`
-	Category              PublicCategoryBrief `json:"category"`
-	BackendCategoryID     string              `json:"backend_category_id"`
-	BackendCategoryName   string              `json:"backend_category_name"`
-	CategoryMappingStatus string              `json:"category_mapping_status"`
-	MappedRemoteCategory  *SyncRemoteCategory `json:"mapped_remote_category"`
-	SyncMode              string              `json:"sync_mode"`
-	CategoryMapping       *string             `json:"category_mapping"`
-	Tags                  []string            `json:"tags"`
-	Actors                []string            `json:"actors"`
-	DurationSeconds       *int                `json:"duration_seconds"`
-	UpdatedAt             time.Time           `json:"updated_at"`
-	PublicationStatus     string              `json:"publication_status"`
-	RemotePostID          *string             `json:"remote_post_id"`
-	RemoteSlug            *string             `json:"remote_slug"`
+	VideoID               string                `json:"video_id"`
+	Title                 string                `json:"title"`
+	Slug                  string                `json:"slug"`
+	Description           *string               `json:"description"`
+	ThumbnailURL          string                `json:"thumbnail_url"`
+	Category              PublicCategoryBrief   `json:"category"`
+	Categories            []PublicCategoryBrief `json:"categories"`
+	CategoryIDs           []string              `json:"category_ids"`
+	BackendCategoryID     string                `json:"backend_category_id"`
+	BackendCategoryName   string                `json:"backend_category_name"`
+	CategoryMappingStatus string                `json:"category_mapping_status"`
+	MappedRemoteCategory  *SyncRemoteCategory   `json:"mapped_remote_category"`
+	SyncMode              string                `json:"sync_mode"`
+	CategoryMapping       *string               `json:"category_mapping"`
+	Tags                  []string              `json:"tags"`
+	Actors                []string              `json:"actors"`
+	DurationSeconds       *int                  `json:"duration_seconds"`
+	UpdatedAt             time.Time             `json:"updated_at"`
+	PublicationStatus     string                `json:"publication_status"`
+	RemotePostID          *string               `json:"remote_post_id"`
+	RemoteSlug            *string               `json:"remote_slug"`
 }
 
 type SyncVideoListResponse struct {

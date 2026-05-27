@@ -106,6 +106,9 @@ func (s *Service) SaveSiteDistribution(ctx context.Context, videoID string, in S
 	if target == nil {
 		return nil, ErrNotFound
 	}
+	if in.Status == StatusApproved && !distributionHasMappedCategory(target) {
+		return nil, ErrMissingCategoryMapping
+	}
 	if in.SyncMode == categorymappings.SyncModePublish && target.MappingSyncMode == categorymappings.SyncModeBlock {
 		return nil, ErrBlockedCategorySync
 	}
@@ -116,6 +119,15 @@ func (s *Service) SaveSiteDistribution(ctx context.Context, videoID string, in S
 		Status:   in.Status,
 		SyncMode: &mode,
 	})
+}
+
+func distributionHasMappedCategory(row *DistributionRow) bool {
+	for _, m := range row.CategoryMappings {
+		if m.RemoteCategoryID != nil && m.MappingEnabled && m.MappingSyncMode != categorymappings.SyncModeBlock {
+			return true
+		}
+	}
+	return row.RemoteCategoryID != nil && row.MappingEnabled && row.MappingSyncMode != categorymappings.SyncModeBlock
 }
 
 type BulkDistributionParams struct {

@@ -16,6 +16,7 @@ type Category struct {
 	Description *string
 	Status      string
 	SortOrder   int
+	VideoCount  int
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	DeletedAt   *time.Time

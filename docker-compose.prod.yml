@@ -128,7 +128,8 @@ services:
     # No published host ports — only nginx fronts the public network.
 
   # One-shot admin seeder. Invoke explicitly after migrations:
-  #   docker compose --env-file .env.production -f docker-compose.prod.yml run --rm seed-admin
+  #   docker compose -f docker-compose.prod.yml run --rm seed-admin
+  #   docker compose -f docker-compose.prod.yml run --rm seed-admin --reset-password
   #
   # The command is idempotent: if ADMIN_EMAIL already exists, it exits
   # successfully without changing the password or creating duplicates.
@@ -151,7 +152,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
       DB_NAME:     ${DB_NAME:-video_storage}
       DB_SSLMODE:  ${DB_SSLMODE:-disable}
-      DB_MAX_CONNS: "5"
+      DB_MAX_CONNS: "20"
 
       JWT_SECRET:            ${JWT_SECRET:?JWT_SECRET is required}
       STREAM_SIGNING_SECRET: ${STREAM_SIGNING_SECRET:?STREAM_SIGNING_SECRET is required}
@@ -292,10 +293,30 @@ services:
       - ./video-storage-api/migrations:/migrations
     networks:
       - internal
+    environment:
+      DB_USER:     ${DB_USER:-video_user}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_NAME:     ${DB_NAME:-video_storage}
+      DB_SSLMODE:  ${DB_SSLMODE:-disable}
     entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        encoded_password=$$(printf '%s' "$$DB_PASSWORD" | sed \
+          -e 's/%/%25/g' \
+          -e 's/ /%20/g' \
+          -e 's/@/%40/g' \
+          -e 's/:/%3A/g' \
+          -e 's/\//%2F/g' \
+          -e 's/?/%3F/g' \
+          -e 's/#/%23/g' \
+          -e 's/\[/%5B/g' \
+          -e 's/\]/%5D/g' \
+          -e 's/&/%26/g' \
+          -e 's/=/%3D/g' \
+          -e 's/+/%2B/g')
+        exec migrate -path=/migrations -database="postgres://$${DB_USER}:$${encoded_password}@postgres:5432/$${DB_NAME}?sslmode=$${DB_SSLMODE}" "$$@"
       - migrate
-      - -path=/migrations
-      - -database=postgres://${DB_USER:-video_user}:${DB_PASSWORD:?DB_PASSWORD is required}@postgres:5432/${DB_NAME:-video_storage}?sslmode=${DB_SSLMODE:-disable}
     command: ["up"]
 
 volumes:

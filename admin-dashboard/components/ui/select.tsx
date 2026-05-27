@@ -4,6 +4,7 @@ import * as React from 'react';
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { Check, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
+import { formControlClass, formControlInteractiveClass, formDisabledClass, formFocusRingClass } from './form-styles';
 import { menuItemClass, menuSurfaceClass } from './menu-styles';
 
 export const Select = SelectPrimitive.Root;
@@ -17,16 +18,18 @@ export const SelectTrigger = React.forwardRef<
 	<SelectPrimitive.Trigger
 		ref={ref}
 		className={cn(
-			'flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm',
-			'placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1',
-			'disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500 dark:disabled:bg-zinc-800',
+			'flex h-9 w-full items-center justify-between rounded-md border px-3 py-1 text-sm shadow-sm',
+			formControlClass,
+			formControlInteractiveClass,
+			formFocusRingClass,
+			formDisabledClass,
 			className,
 		)}
 		{...props}
 	>
 		{children}
 		<SelectPrimitive.Icon asChild>
-			<ChevronDown className="h-4 w-4 text-muted-foreground" />
+			<ChevronDown className="h-4 w-4 text-gray-500 dark:text-[#9ca3af]" />
 		</SelectPrimitive.Icon>
 	</SelectPrimitive.Trigger>
 ));
@@ -43,6 +46,7 @@ export const SelectContent = React.forwardRef<
 			className={cn(
 				'relative max-h-96 min-w-[8rem] overflow-hidden rounded-md',
 				menuSurfaceClass,
+				'data-[state=open]:animate-fade-in',
 				position === 'popper' && 'data-[side=bottom]:translate-y-1',
 				className,
 			)}
@@ -62,12 +66,12 @@ export const SelectItem = React.forwardRef<
 >(({ className, children, ...props }, ref) => (
 	<SelectPrimitive.Item
 		ref={ref}
-			className={cn(
-				'relative flex w-full cursor-pointer select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none',
-				'data-[disabled]:pointer-events-none data-[disabled]:text-zinc-500',
-				menuItemClass,
-				className,
-			)}
+		className={cn(
+			'relative flex w-full cursor-pointer select-none items-center rounded-sm py-2 pl-8 pr-2 text-sm outline-none',
+			'data-[disabled]:pointer-events-none data-[disabled]:text-zinc-500 data-[disabled]:hover:bg-transparent',
+			menuItemClass,
+			className,
+		)}
 		{...props}
 	>
 		<span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">

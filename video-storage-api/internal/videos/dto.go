@@ -9,23 +9,25 @@ import "time"
 // URL that public clients would use. Admins also get the raw filename
 // inside `thumbnail.filename` for debugging.
 type VideoResponse struct {
-	ID                string             `json:"id"`
-	Title             string             `json:"title"`
-	Slug              string             `json:"slug"`
-	Description       *string            `json:"description"`
-	Status            string             `json:"status"`
-	Visibility        string             `json:"visibility"`
-	Category          VideoCategoryBrief `json:"category"`
-	Video             VideoFile          `json:"video"`
-	Thumbnail         ThumbnailFile      `json:"thumbnail"`
-	ThumbnailURL      string             `json:"thumbnail_url"`
-	DurationSeconds   *int               `json:"duration_seconds"`
-	ViewsCount        int64              `json:"views_count"`
-	UploadedByAdminID string             `json:"uploaded_by_admin_id"`
-	HLS               HLSStatusResponse  `json:"hls"`
-	ApprovedSiteCount int                `json:"approved_site_count"`
-	CreatedAt         time.Time          `json:"created_at"`
-	UpdatedAt         time.Time          `json:"updated_at"`
+	ID                string               `json:"id"`
+	Title             string               `json:"title"`
+	Slug              string               `json:"slug"`
+	Description       *string              `json:"description"`
+	Status            string               `json:"status"`
+	Visibility        string               `json:"visibility"`
+	Category          VideoCategoryBrief   `json:"category"`
+	Categories        []VideoCategoryBrief `json:"categories"`
+	CategoryIDs       []string             `json:"category_ids"`
+	Video             VideoFile            `json:"video"`
+	Thumbnail         ThumbnailFile        `json:"thumbnail"`
+	ThumbnailURL      string               `json:"thumbnail_url"`
+	DurationSeconds   *int                 `json:"duration_seconds"`
+	ViewsCount        int64                `json:"views_count"`
+	UploadedByAdminID string               `json:"uploaded_by_admin_id"`
+	HLS               HLSStatusResponse    `json:"hls"`
+	ApprovedSiteCount int                  `json:"approved_site_count"`
+	CreatedAt         time.Time            `json:"created_at"`
+	UpdatedAt         time.Time            `json:"updated_at"`
 }
 
 // HLSStatusResponse mirrors the videos.hls_* columns so admins can
@@ -87,7 +89,7 @@ type CreateVideoFormFields struct {
 	Title           string `form:"title"            binding:"required,min=1,max=300"`
 	Slug            string `form:"slug"             binding:"required,min=1,max=300"`
 	Description     string `form:"description"      binding:"max=5000"`
-	CategoryID      string `form:"category_id"      binding:"required,uuid"`
+	CategoryID      string `form:"category_id"      binding:"omitempty,uuid"`
 	Visibility      string `form:"visibility"       binding:"omitempty,oneof=public private"`
 	ThumbnailSecond string `form:"thumbnail_second"`
 }
@@ -107,6 +109,16 @@ type UpdateVideoFormFields struct {
 }
 
 func toResponse(v *Video, thumbnailURL string) VideoResponse {
+	categories := make([]VideoCategoryBrief, 0, len(v.Categories))
+	categoryIDs := make([]string, 0, len(v.Categories))
+	for _, c := range v.Categories {
+		categories = append(categories, VideoCategoryBrief{ID: c.ID, Name: c.Name})
+		categoryIDs = append(categoryIDs, c.ID)
+	}
+	if len(categories) == 0 && v.CategoryID != "" {
+		categories = append(categories, VideoCategoryBrief{ID: v.CategoryID, Name: v.CategoryName})
+		categoryIDs = append(categoryIDs, v.CategoryID)
+	}
 	return VideoResponse{
 		ID:          v.ID,
 		Title:       v.Title,
@@ -118,6 +130,8 @@ func toResponse(v *Video, thumbnailURL string) VideoResponse {
 			ID:   v.CategoryID,
 			Name: v.CategoryName,
 		},
+		Categories:  categories,
+		CategoryIDs: categoryIDs,
 		Video: VideoFile{
 			Filename:     v.VideoFilename,
 			OriginalName: v.VideoOriginalName,

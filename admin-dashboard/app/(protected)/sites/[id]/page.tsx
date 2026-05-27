@@ -117,7 +117,7 @@ function ApprovedVideosTable({ items, isLoading, run }: { items: NonNullable<Pub
 								<div className="font-medium">{p.video?.title ?? p.video_id}</div>
 								<div className="text-xs text-muted-foreground">{p.video?.slug}</div>
 							</TableCell>
-							<TableCell>{p.video?.category.name ?? '—'}</TableCell>
+							<TableCell><CategoryPills categories={p.video?.categories?.length ? p.video.categories : p.video?.category ? [p.video.category] : []} /></TableCell>
 							<TableCell><StatusBadge value={p.status} /></TableCell>
 							<TableCell className="text-sm text-muted-foreground">{p.remote_post_id ?? '—'}</TableCell>
 							<TableCell className="text-sm text-muted-foreground">{p.last_synced_at ? formatDate(p.last_synced_at) : 'Never'}</TableCell>
@@ -385,7 +385,7 @@ function SiteBulkApproveModal({
 										<div className="font-medium">{v.title}</div>
 										<div className="text-xs text-muted-foreground">{v.slug}</div>
 									</TableCell>
-									<TableCell>{v.category?.name ?? '-'}</TableCell>
+									<TableCell><CategoryPills categories={v.categories?.length ? v.categories : v.category ? [v.category] : []} /></TableCell>
 									<TableCell><StatusBadge value={v.status} /></TableCell>
 									<TableCell><StatusBadge value={v.visibility} /></TableCell>
 								</TableRow>
@@ -435,7 +435,15 @@ function CategoryMappingPanel({ siteId, publications }: { siteId: string; public
 	const rows = mappingData?.data ?? [];
 	const remotes = remoteData?.data ?? [];
 	const effectiveRows = rows.map((row) => drafts[row.backend_category.id] ?? row);
-	const approvedCategories = useMemo(() => new Set(publications.filter((p) => p.status === 'approved' || p.status === 'synced').map((p) => p.video?.category.id).filter(Boolean) as string[]), [publications]);
+	const approvedCategories = useMemo(() => {
+		const ids = new Set<string>();
+		for (const p of publications) {
+			if (p.status !== 'approved' && p.status !== 'synced') continue;
+			const categories = p.video?.categories?.length ? p.video.categories : p.video?.category ? [p.video.category] : [];
+			for (const category of categories) ids.add(category.id);
+		}
+		return ids;
+	}, [publications]);
 	const warnings = effectiveRows.filter((row) => approvedCategories.has(row.backend_category.id) && (!row.enabled || !row.remote_category_id || row.sync_mode === 'block'));
 
 	function patch(row: CategoryMappingRow, changes: Partial<CategoryMappingRow>) {
@@ -549,6 +557,17 @@ function CategoryMappingPanel({ siteId, publications }: { siteId: string; public
 					</TableBody>
 				</Table>
 			</div>
+		</div>
+	);
+}
+
+function CategoryPills({ categories }: { categories: Array<{ id: string; name: string }> }) {
+	if (categories.length === 0) return <span className="text-sm text-muted-foreground">—</span>;
+	return (
+		<div className="flex max-w-56 flex-wrap gap-1">
+			{categories.map((category) => (
+				<Badge key={category.id} variant="secondary">{category.name}</Badge>
+			))}
 		</div>
 	);
 }

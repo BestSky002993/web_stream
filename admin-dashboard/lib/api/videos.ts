@@ -31,6 +31,7 @@ export interface UploadVideoInput {
 	slug: string;
 	description?: string;
 	category_id: string;
+	category_ids?: string[];
 	visibility?: 'public' | 'private';
 	thumbnail_second?: number;
 	video: File;
@@ -49,6 +50,7 @@ export function uploadVideo(input: UploadVideoInput): Promise<Video> {
 		fd.append('slug', input.slug);
 		if (input.description) fd.append('description', input.description);
 		fd.append('category_id', input.category_id);
+		for (const id of input.category_ids ?? []) fd.append('category_ids', id);
 		if (input.visibility) fd.append('visibility', input.visibility);
 		if (input.thumbnail_second !== undefined) fd.append('thumbnail_second', String(input.thumbnail_second));
 		fd.append('video', input.video);
@@ -89,6 +91,7 @@ export interface UpdateVideoInput {
 	slug?: string;
 	description?: string;
 	category_id?: string;
+	category_ids?: string[];
 	status?: string;
 	visibility?: 'public' | 'private';
 	thumbnail_second?: number;
@@ -98,6 +101,10 @@ export interface UpdateVideoInput {
 export function updateVideo(id: string, input: UpdateVideoInput): Promise<Video> {
 	const fd = new FormData();
 	for (const [k, v] of Object.entries(input)) {
+		if (k === 'category_ids' && Array.isArray(v)) {
+			for (const id of v) fd.append('category_ids', id);
+			continue;
+		}
 		if (v !== undefined && v !== null && v !== '') fd.append(k, String(v));
 	}
 	return api<Video>(`/api/v1/admin/videos/${id}`, {

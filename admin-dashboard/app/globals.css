@@ -25,28 +25,92 @@
 	}
 
 	.dark {
-		--background: 240 10% 4%;
-		--foreground: 0 0% 98%;
-		--card: 240 10% 6%;
-		--card-foreground: 0 0% 98%;
-		--primary: 0 0% 98%;
-		--primary-foreground: 240 6% 10%;
-		--secondary: 240 4% 16%;
-		--secondary-foreground: 0 0% 98%;
-		--muted: 240 4% 16%;
-		--muted-foreground: 240 5% 65%;
-		--accent: 240 4% 16%;
-		--accent-foreground: 0 0% 98%;
+		--background: 221 39% 11%;
+		--foreground: 210 20% 98%;
+		--card: 221 39% 11%;
+		--card-foreground: 210 20% 98%;
+		--primary: 221 83% 53%;
+		--primary-foreground: 210 20% 98%;
+		--secondary: 215 28% 17%;
+		--secondary-foreground: 210 20% 98%;
+		--muted: 215 28% 17%;
+		--muted-foreground: 220 9% 64%;
+		--accent: 215 28% 17%;
+		--accent-foreground: 210 20% 98%;
 		--destructive: 0 63% 41%;
-		--destructive-foreground: 0 0% 98%;
-		--border: 240 4% 16%;
-		--input: 240 4% 16%;
-		--ring: 240 5% 65%;
+		--destructive-foreground: 210 20% 98%;
+		--border: 215 19% 35%;
+		--input: 215 19% 35%;
+		--ring: 217 91% 60%;
 	}
 
 	* { @apply border-border; }
 	body {
 		@apply bg-background text-foreground;
 		font-feature-settings: "rlig" 1, "calt" 1;
+	}
+}
+
+@layer components {
+	.dark input:not([type="checkbox"]):not([type="radio"]),
+	.dark textarea,
+	.dark select {
+		@apply border-[#374151] bg-[#111827] text-[#f9fafb] placeholder:text-[#9ca3af];
+	}
+
+	.dark input:not([type="checkbox"]):not([type="radio"]):hover,
+	.dark textarea:hover,
+	.dark select:hover {
+		@apply bg-[#1f2937];
+	}
+
+	.dark input:not([type="checkbox"]):not([type="radio"]):focus-visible,
+	.dark textarea:focus-visible,
+	.dark select:focus-visible {
+		@apply outline-none ring-2 ring-blue-400 ring-offset-2 ring-offset-[#111827];
+	}
+
+	.dark input:disabled,
+	.dark textarea:disabled,
+	.dark select:disabled,
+	.dark button:disabled {
+		@apply border-[#374151] bg-[#1f2937] text-gray-300 opacity-100;
+	}
+
+	.dark [data-radix-popper-content-wrapper] [role="dialog"],
+	.dark [data-radix-popper-content-wrapper] [role="menu"],
+	.dark [data-radix-popper-content-wrapper] [role="listbox"] {
+		@apply border border-[#374151] bg-[#111827] text-[#f9fafb] shadow-2xl shadow-black/50;
+	}
+
+	.dark [cmdk-root],
+	.dark [cmdk-list] {
+		@apply bg-[#111827] text-[#f9fafb];
+	}
+
+	.dark [cmdk-list] {
+		@apply max-h-80 overflow-y-auto p-1;
+	}
+
+	.dark [cmdk-item] {
+		@apply border-b border-[#374151] px-2 py-2 text-[#f9fafb] outline-none transition-colors last:border-b-0;
+	}
+
+	.dark [cmdk-item][aria-selected="true"],
+	.dark [cmdk-item][data-selected="true"] {
+		@apply bg-[#1f2937] text-white ring-1 ring-inset ring-gray-500;
+	}
+
+	.dark [cmdk-item][data-disabled="true"] {
+		@apply text-zinc-500;
+	}
+
+	.dark [cmdk-item]:focus-visible {
+		@apply ring-2 ring-inset ring-blue-400;
+	}
+
+	.dark [cmdk-item][data-state="checked"],
+	.dark [cmdk-item][aria-checked="true"] {
+		@apply bg-[#2563eb] font-medium text-white;
 	}
 }

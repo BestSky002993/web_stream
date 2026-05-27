@@ -26,6 +26,7 @@ type Video struct {
 	ID                string
 	CategoryID        string
 	CategoryName      string
+	Categories        []VideoCategory
 	Title             string
 	Slug              string
 	Description       *string
@@ -48,4 +49,9 @@ type Video struct {
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	DeletedAt         *time.Time
+}
+
+type VideoCategory struct {
+	ID   string
+	Name string
 }

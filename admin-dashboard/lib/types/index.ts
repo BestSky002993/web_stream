@@ -26,6 +26,7 @@ export interface Category {
 	description: string | null;
 	status: 'active' | 'disabled';
 	sort_order: number;
+	video_count?: number;
 	created_at: string;
 	updated_at: string;
 }
@@ -54,6 +55,8 @@ export interface Video {
 	status: VideoStatus;
 	visibility: VideoVisibility;
 	category: { id: string; name: string };
+	categories: Array<{ id: string; name: string }>;
+	category_ids: string[];
 	video: {
 		filename: string;
 		original_name: string;
@@ -131,6 +134,8 @@ export interface SiteVideoPublication {
 		slug: string;
 		description: string | null;
 		category: { id: string; name: string };
+		categories?: Array<{ id: string; name: string }>;
+		category_ids?: string[];
 		status: VideoStatus;
 		visibility: VideoVisibility;
 		duration_seconds: number | null;
@@ -220,6 +225,15 @@ export interface SiteDistributionRow {
 	mapping_enabled: boolean;
 	remote_category_id: string | null;
 	remote_category_name: string | null;
+	category_mappings: Array<{
+		category_id: string;
+		category_name: string;
+		mapping_status: CategoryMappingStatus;
+		mapping_sync_mode: SyncMode;
+		mapping_enabled: boolean;
+		remote_category_id: string | null;
+		remote_category_name: string | null;
+	}>;
 	warnings: string[];
 	updated_at: string | null;
 	publication?: SiteVideoPublication;

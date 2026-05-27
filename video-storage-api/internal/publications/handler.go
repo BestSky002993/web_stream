@@ -207,7 +207,7 @@ func toDistributionResponse(rows []DistributionRow) []SiteDistributionRow {
 		}
 		warnings := []string{}
 		if row.MappingStatus == "unmapped" {
-			warnings = append(warnings, "Category is not mapped for this site.")
+			warnings = append(warnings, "No assigned category is mapped for this site.")
 		}
 		if row.MappingStatus == "disabled" {
 			warnings = append(warnings, "Category mapping is disabled for this site.")
@@ -232,6 +232,7 @@ func toDistributionResponse(rows []DistributionRow) []SiteDistributionRow {
 			MappingEnabled:     row.MappingEnabled,
 			RemoteCategoryID:   row.RemoteCategoryID,
 			RemoteCategoryName: row.RemoteCategoryName,
+			CategoryMappings:   row.CategoryMappings,
 			Warnings:           warnings,
 			UpdatedAt:          updatedAt,
 			Publication:        pubResp,

@@ -29,6 +29,7 @@ type CategoryResponse struct {
 	Description *string   `json:"description"`
 	Status      string    `json:"status"`
 	SortOrder   int       `json:"sort_order"`
+	VideoCount  int       `json:"video_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -60,6 +61,7 @@ func toResponse(c *Category) CategoryResponse {
 		Description: c.Description,
 		Status:      c.Status,
 		SortOrder:   c.SortOrder,
+		VideoCount:  c.VideoCount,
 		CreatedAt:   c.CreatedAt,
 		UpdatedAt:   c.UpdatedAt,
 	}

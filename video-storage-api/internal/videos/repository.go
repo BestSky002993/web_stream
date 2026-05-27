@@ -25,6 +25,20 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 // scanVideo below.
 const videoSelect = `
     v.id, v.category_id, c.name AS category_name,
+    ARRAY(
+        SELECT c2.id::text
+        FROM video_category_assignments vca
+        INNER JOIN categories c2 ON c2.id = vca.category_id
+        WHERE vca.video_id = v.id
+        ORDER BY (vca.category_id = v.category_id) DESC, c2.sort_order ASC, c2.name ASC
+    ) AS category_ids,
+    ARRAY(
+        SELECT c2.name
+        FROM video_category_assignments vca
+        INNER JOIN categories c2 ON c2.id = vca.category_id
+        WHERE vca.video_id = v.id
+        ORDER BY (vca.category_id = v.category_id) DESC, c2.sort_order ASC, c2.name ASC
+    ) AS category_names,
     v.title, v.slug, v.description,
     v.status, v.visibility,
     v.video_filename, v.video_original_name, v.video_mime_type, v.video_size_bytes,
@@ -44,6 +58,7 @@ const videoSelect = `
 // InsertInput is the persistence shape for Insert — already validated.
 type InsertInput struct {
 	CategoryID        string
+	CategoryIDs       []string
 	Title             string
 	Slug              string
 	Description       *string
@@ -63,6 +78,8 @@ type InsertInput struct {
 // "leave unchanged".
 type UpdateInput struct {
 	CategoryID        *string
+	CategoryIDs       []string
+	UpdateCategories  bool
 	Title             *string
 	Slug              *string
 	Description       *string
@@ -87,21 +104,23 @@ type ListFilters struct {
 
 // Insert creates a new video row and returns it with the joined category name.
 func (r *Repository) Insert(ctx context.Context, in InsertInput) (*Video, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin insert video: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	const insertSQL = `
-        WITH inserted AS (
-            INSERT INTO videos (
-                category_id, title, slug, description, status, visibility,
-                video_filename, video_original_name, video_mime_type, video_size_bytes,
-                thumbnail_filename, thumbnail_second, duration_seconds, uploaded_by_admin_id
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-            RETURNING *
+        INSERT INTO videos (
+            category_id, title, slug, description, status, visibility,
+            video_filename, video_original_name, video_mime_type, video_size_bytes,
+            thumbnail_filename, thumbnail_second, duration_seconds, uploaded_by_admin_id
         )
-        SELECT ` + videoSelect + `
-        FROM inserted v
-        INNER JOIN categories c ON c.id = v.category_id
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        RETURNING id
     `
-	row := r.pool.QueryRow(ctx, insertSQL,
+	var id string
+	if err := tx.QueryRow(ctx, insertSQL,
 		in.CategoryID,
 		in.Title,
 		in.Slug,
@@ -116,15 +135,19 @@ func (r *Repository) Insert(ctx context.Context, in InsertInput) (*Video, error)
 		in.ThumbnailSecond,
 		in.DurationSeconds,
 		in.UploadedByAdminID,
-	)
-	v, err := scanVideo(row)
-	if err != nil {
+	).Scan(&id); err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrSlugTaken
 		}
 		return nil, fmt.Errorf("insert video: %w", err)
 	}
-	return v, nil
+	if err := replaceCategoryAssignments(ctx, tx, id, in.CategoryIDs); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit insert video: %w", err)
+	}
+	return r.FindByID(ctx, id)
 }
 
 // FindByID returns the non-deleted video matching id, with category name joined.
@@ -171,6 +194,12 @@ func (r *Repository) FindBySlug(ctx context.Context, slug string) (*Video, error
 // Update applies a partial update via COALESCE. Returns ErrNotFound if
 // the row doesn't exist or is soft-deleted; ErrSlugTaken on collision.
 func (r *Repository) Update(ctx context.Context, id string, in UpdateInput) (*Video, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin update video: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	const updateSQL = `
         WITH updated AS (
             UPDATE videos
@@ -191,7 +220,7 @@ func (r *Repository) Update(ctx context.Context, id string, in UpdateInput) (*Vi
         FROM updated v
         INNER JOIN categories c ON c.id = v.category_id
     `
-	row := r.pool.QueryRow(ctx, updateSQL,
+	row := tx.QueryRow(ctx, updateSQL,
 		id,
 		in.CategoryID,
 		in.Title,
@@ -203,7 +232,7 @@ func (r *Repository) Update(ctx context.Context, id string, in UpdateInput) (*Vi
 		in.ThumbnailSecond,
 		in.DurationSeconds,
 	)
-	v, err := scanVideo(row)
+	_, err = scanVideo(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -213,7 +242,15 @@ func (r *Repository) Update(ctx context.Context, id string, in UpdateInput) (*Vi
 		}
 		return nil, fmt.Errorf("update video: %w", err)
 	}
-	return v, nil
+	if in.UpdateCategories {
+		if err := replaceCategoryAssignments(ctx, tx, id, in.CategoryIDs); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit update video: %w", err)
+	}
+	return r.FindByID(ctx, id)
 }
 
 // SoftDelete sets deleted_at, status='deleted', updated_at — without
@@ -247,7 +284,12 @@ func (r *Repository) List(ctx context.Context, f ListFilters) ([]Video, int, err
         INNER JOIN categories c ON c.id = v.category_id
         WHERE v.deleted_at IS NULL
           AND ($1::text IS NULL OR (v.title ILIKE $1 OR v.slug ILIKE $1))
-          AND ($2::uuid IS NULL OR v.category_id = $2)
+          AND (
+              $2::uuid IS NULL OR EXISTS (
+                  SELECT 1 FROM video_category_assignments vca
+                  WHERE vca.video_id = v.id AND vca.category_id = $2
+              )
+          )
           AND ($3::text IS NULL OR v.status     = $3)
           AND ($4::text IS NULL OR v.visibility = $4)
           AND (
@@ -292,23 +334,12 @@ func (r *Repository) List(ctx context.Context, f ListFilters) ([]Video, int, err
 	items := []Video{}
 	total := 0
 	for rows.Next() {
-		var v Video
 		var rowTotal int
-		if err := rows.Scan(
-			&v.ID, &v.CategoryID, &v.CategoryName,
-			&v.Title, &v.Slug, &v.Description,
-			&v.Status, &v.Visibility,
-			&v.VideoFilename, &v.VideoOriginalName, &v.VideoMimeType, &v.VideoSizeBytes,
-			&v.ThumbnailFilename, &v.ThumbnailSecond,
-			&v.DurationSeconds, &v.ViewsCount, &v.UploadedByAdminID,
-			&v.HLSStatus, &v.HLSReadyAt, &v.HLSError, &v.HLSVariants,
-			&v.ApprovedSiteCount,
-			&v.CreatedAt, &v.UpdatedAt, &v.DeletedAt,
-			&rowTotal,
-		); err != nil {
+		v, err := scanVideoWithTotal(rows, &rowTotal)
+		if err != nil {
 			return nil, 0, fmt.Errorf("scan video row: %w", err)
 		}
-		items = append(items, v)
+		items = append(items, *v)
 		total = rowTotal
 	}
 	if err := rows.Err(); err != nil {
@@ -342,7 +373,12 @@ func (r *Repository) ListPublic(ctx context.Context, f ListPublicFilters) ([]Vid
           AND v.visibility = 'public'
           AND c.deleted_at IS NULL
           AND ($1::text IS NULL OR (v.title ILIKE $1 OR v.slug ILIKE $1))
-          AND ($2::uuid IS NULL OR v.category_id = $2)
+          AND (
+              $2::uuid IS NULL OR EXISTS (
+                  SELECT 1 FROM video_category_assignments vca
+                  WHERE vca.video_id = v.id AND vca.category_id = $2
+              )
+          )
         ` + orderClause + `
         LIMIT $3 OFFSET $4
     `
@@ -364,23 +400,12 @@ func (r *Repository) ListPublic(ctx context.Context, f ListPublicFilters) ([]Vid
 	items := []Video{}
 	total := 0
 	for rows.Next() {
-		var v Video
 		var rowTotal int
-		if err := rows.Scan(
-			&v.ID, &v.CategoryID, &v.CategoryName,
-			&v.Title, &v.Slug, &v.Description,
-			&v.Status, &v.Visibility,
-			&v.VideoFilename, &v.VideoOriginalName, &v.VideoMimeType, &v.VideoSizeBytes,
-			&v.ThumbnailFilename, &v.ThumbnailSecond,
-			&v.DurationSeconds, &v.ViewsCount, &v.UploadedByAdminID,
-			&v.HLSStatus, &v.HLSReadyAt, &v.HLSError, &v.HLSVariants,
-			&v.ApprovedSiteCount,
-			&v.CreatedAt, &v.UpdatedAt, &v.DeletedAt,
-			&rowTotal,
-		); err != nil {
+		v, err := scanVideoWithTotal(rows, &rowTotal)
+		if err != nil {
 			return nil, 0, fmt.Errorf("scan public video row: %w", err)
 		}
-		items = append(items, v)
+		items = append(items, *v)
 		total = rowTotal
 	}
 	if err := rows.Err(); err != nil {
@@ -427,21 +452,11 @@ func (r *Repository) RandomPublic(ctx context.Context, limit int, seedKey string
 
 	items := []Video{}
 	for rows.Next() {
-		var v Video
-		if err := rows.Scan(
-			&v.ID, &v.CategoryID, &v.CategoryName,
-			&v.Title, &v.Slug, &v.Description,
-			&v.Status, &v.Visibility,
-			&v.VideoFilename, &v.VideoOriginalName, &v.VideoMimeType, &v.VideoSizeBytes,
-			&v.ThumbnailFilename, &v.ThumbnailSecond,
-			&v.DurationSeconds, &v.ViewsCount, &v.UploadedByAdminID,
-			&v.HLSStatus, &v.HLSReadyAt, &v.HLSError, &v.HLSVariants,
-			&v.ApprovedSiteCount,
-			&v.CreatedAt, &v.UpdatedAt, &v.DeletedAt,
-		); err != nil {
+		v, err := scanVideo(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan random video row: %w", err)
 		}
-		items = append(items, v)
+		items = append(items, *v)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate random videos: %w", err)
@@ -454,7 +469,7 @@ func (r *Repository) CategoryExists(ctx context.Context, categoryID string) (boo
 	const query = `
         SELECT EXISTS (
             SELECT 1 FROM categories
-            WHERE id = $1 AND deleted_at IS NULL
+            WHERE id = $1 AND deleted_at IS NULL AND status = 'active'
         )
     `
 	var exists bool
@@ -462,6 +477,22 @@ func (r *Repository) CategoryExists(ctx context.Context, categoryID string) (boo
 		return false, fmt.Errorf("check category existence: %w", err)
 	}
 	return exists, nil
+}
+
+func (r *Repository) ActiveCategoryCount(ctx context.Context, categoryIDs []string) (int, error) {
+	if len(categoryIDs) == 0 {
+		return 0, nil
+	}
+	const query = `
+        SELECT COUNT(*)
+        FROM categories
+        WHERE deleted_at IS NULL AND status = 'active' AND id = ANY($1::uuid[])
+    `
+	var count int
+	if err := r.pool.QueryRow(ctx, query, categoryIDs).Scan(&count); err != nil {
+		return 0, fmt.Errorf("check categories existence: %w", err)
+	}
+	return count, nil
 }
 
 // orderClauseFor returns a static ORDER BY clause from a whitelist.
@@ -489,9 +520,15 @@ type scanner interface {
 }
 
 func scanVideo(row scanner) (*Video, error) {
+	return scanVideoWithTotal(row, nil)
+}
+
+func scanVideoWithTotal(row scanner, total *int) (*Video, error) {
 	var v Video
-	if err := row.Scan(
+	var categoryIDs, categoryNames []string
+	dest := []any{
 		&v.ID, &v.CategoryID, &v.CategoryName,
+		&categoryIDs, &categoryNames,
 		&v.Title, &v.Slug, &v.Description,
 		&v.Status, &v.Visibility,
 		&v.VideoFilename, &v.VideoOriginalName, &v.VideoMimeType, &v.VideoSizeBytes,
@@ -500,10 +537,40 @@ func scanVideo(row scanner) (*Video, error) {
 		&v.HLSStatus, &v.HLSReadyAt, &v.HLSError, &v.HLSVariants,
 		&v.ApprovedSiteCount,
 		&v.CreatedAt, &v.UpdatedAt, &v.DeletedAt,
-	); err != nil {
+	}
+	if total != nil {
+		dest = append(dest, total)
+	}
+	if err := row.Scan(dest...); err != nil {
 		return nil, err
 	}
+	for i, id := range categoryIDs {
+		name := ""
+		if i < len(categoryNames) {
+			name = categoryNames[i]
+		}
+		v.Categories = append(v.Categories, VideoCategory{ID: id, Name: name})
+	}
+	if len(v.Categories) == 0 && v.CategoryID != "" {
+		v.Categories = append(v.Categories, VideoCategory{ID: v.CategoryID, Name: v.CategoryName})
+	}
 	return &v, nil
+}
+
+func replaceCategoryAssignments(ctx context.Context, tx pgx.Tx, videoID string, categoryIDs []string) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM video_category_assignments WHERE video_id = $1`, videoID); err != nil {
+		return fmt.Errorf("delete video category assignments: %w", err)
+	}
+	for _, categoryID := range categoryIDs {
+		if _, err := tx.Exec(ctx, `
+            INSERT INTO video_category_assignments (video_id, category_id)
+            VALUES ($1, $2)
+            ON CONFLICT (video_id, category_id) DO NOTHING
+        `, videoID, categoryID); err != nil {
+			return fmt.Errorf("insert video category assignment: %w", err)
+		}
+	}
+	return nil
 }
 
 func isUniqueViolation(err error) bool {

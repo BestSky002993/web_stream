@@ -25,6 +25,18 @@ const categoryColumns = `
     created_at, updated_at, deleted_at
 `
 
+const categoryListColumns = `
+    id, name, slug, description, status, sort_order,
+    (
+        SELECT COUNT(*)
+        FROM video_category_assignments vca
+        INNER JOIN videos v ON v.id = vca.video_id
+        WHERE vca.category_id = categories.id
+          AND v.deleted_at IS NULL
+    ) AS video_count,
+    created_at, updated_at, deleted_at
+`
+
 // CreateInput is the persistence-layer shape (already validated/normalized).
 type CreateInput struct {
 	Name        string
@@ -156,7 +168,7 @@ func (r *Repository) List(ctx context.Context, f ListFilters) ([]Category, int, 
 
 	// $1=search (text|nil) $2=status (text|nil) $3=limit $4=offset
 	query := `
-        SELECT ` + categoryColumns + `, COUNT(*) OVER() AS total_count
+        SELECT ` + categoryListColumns + `, COUNT(*) OVER() AS total_count
         FROM categories
         WHERE deleted_at IS NULL
           AND ($1::text IS NULL OR (name ILIKE $1 OR slug ILIKE $1))
@@ -189,6 +201,7 @@ func (r *Repository) List(ctx context.Context, f ListFilters) ([]Category, int, 
 		var rowTotal int
 		if err := rows.Scan(
 			&c.ID, &c.Name, &c.Slug, &c.Description, &c.Status, &c.SortOrder,
+			&c.VideoCount,
 			&c.CreatedAt, &c.UpdatedAt, &c.DeletedAt,
 			&rowTotal,
 		); err != nil {

@@ -12,20 +12,6 @@
 #   - Cloudflare Origin Certificates can be placed at the same cert paths.
 #   - Keep Range requests enabled; they are required for MP4 seeking and HLS.
 
-upstream api_backend {
-    server api:8080;
-    keepalive 64;
-    keepalive_requests 1000;
-    keepalive_timeout 60s;
-}
-
-upstream dashboard_backend {
-    server dashboard:3000;
-    keepalive 32;
-    keepalive_requests 1000;
-    keepalive_timeout 60s;
-}
-
 map $http_upgrade $connection_upgrade {
     default upgrade;
     ''      close;
@@ -54,6 +40,10 @@ server {
     http2 on;
     server_name _;
     absolute_redirect off;
+
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    set $api_backend_url http://api:8080;
+    set $dashboard_backend_url http://dashboard:3000;
 
     ssl_certificate     /etc/nginx/certs/fullchain.pem;
     ssl_certificate_key /etc/nginx/certs/privkey.pem;
@@ -98,7 +88,7 @@ server {
         proxy_busy_buffers_size 256k;
         proxy_request_buffering off;
         proxy_max_temp_file_size 0;
-        proxy_pass http://api_backend;
+        proxy_pass $api_backend_url;
     }
 
     location ~ ^/api/v1/hls/.+\.m3u8$ {
@@ -108,7 +98,7 @@ server {
         proxy_max_temp_file_size 0;
         proxy_hide_header Cache-Control;
         add_header Cache-Control "private, no-cache, max-age=0, must-revalidate" always;
-        proxy_pass http://api_backend;
+        proxy_pass $api_backend_url;
     }
 
     location ~ ^/api/v1/hls/.+\.(ts|m4s|mp4)$ {
@@ -124,7 +114,7 @@ server {
         proxy_hide_header Cache-Control;
         add_header Cache-Control "private, max-age=3600, immutable" always;
         add_header Accept-Ranges "bytes" always;
-        proxy_pass http://api_backend;
+        proxy_pass $api_backend_url;
     }
 
     location ~ ^/api/v1/stream/ {
@@ -138,19 +128,19 @@ server {
         proxy_set_header Range $http_range;
         proxy_set_header If-Range $http_if_range;
         add_header Accept-Ranges "bytes" always;
-        proxy_pass http://api_backend;
+        proxy_pass $api_backend_url;
     }
 
     location = /health {
-        proxy_pass http://api_backend;
+        proxy_pass $api_backend_url;
     }
 
     location ${ADMIN_BASE_PATH}/ {
-        proxy_pass http://dashboard_backend;
+        proxy_pass $dashboard_backend_url;
     }
 
     location = ${ADMIN_BASE_PATH} {
-        proxy_pass http://dashboard_backend;
+        proxy_pass $dashboard_backend_url;
     }
 
     location = /admin {
@@ -164,7 +154,7 @@ server {
     location /_next/ {
         proxy_buffering on;
         expires 1y;
-        proxy_pass http://dashboard_backend;
+        proxy_pass $dashboard_backend_url;
     }
 
     location = / {
